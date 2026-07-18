@@ -1,0 +1,21 @@
+include: package:flutter_lints/flutter.yaml
+
+# Additional information about this file can be found at
+# https://dart.dev/guides/language/analysis-options
+
+analyzer:
+  exclude:
+    # Nested adapter packages are analyzed from their own package roots
+    # (mirrored analysis_options + CI runs them independently).
+    - packages/**
+  language:
+    strict-casts: true
+    strict-raw-types: true
+
+linter:
+  rules:
+    # Async-heavy SDK: a silently dropped await on a switch/seek/save future is
+    # exactly the bug class that causes state desync and add-after-close.
+    # Intentional fire-and-forget must be explicit via unawaited().
+    unawaited_futures: true
+    cancel_subscriptions: true

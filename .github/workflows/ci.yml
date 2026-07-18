@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: core
+            dir: .
+            run_tests: true
+          - name: example
+            dir: example
+            run_tests: false
+          - name: fvp-adapter
+            dir: packages/vidra_player_fvp
+            run_tests: false
+          - name: media-kit-adapter
+            dir: packages/vidra_player_media_kit
+            run_tests: false
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        working-directory: ${{ matrix.dir }}
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: ${{ matrix.dir }}
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        if: ${{ matrix.run_tests }}
+        working-directory: ${{ matrix.dir }}
+        run: flutter test
