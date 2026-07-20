@@ -2,6 +2,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 class HlsNodeState {
+  /// Clears both caches. Process-wide state that outlives a single playback
+  /// session, so a test asserting probe order has to start from a known one.
+  @visibleForTesting
+  static void reset() {
+    _badIps.clear();
+    _warmHosts.clear();
+  }
+
   static final Map<String, DateTime> _badIps = {};
 
   // Hosts whose warmup succeeded recently. Episode/quality switches hit the
