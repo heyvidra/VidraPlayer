@@ -194,10 +194,26 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.byType(PlayerMenuPanel), findsOneWidget);
-    expect(find.text('设置为片头'), findsOneWidget);
-    expect(find.text('设置为片尾'), findsOneWidget);
+    expect(find.text('片头到此结束'), findsOneWidget);
+    expect(find.text('片尾从此开始'), findsOneWidget);
+    // Both rows quote the SAME clicked time. The intro row reading as an
+    // absolute time while the outro row read as a remaining duration is what
+    // made users stop and do arithmetic to realise they'd clicked one spot.
+    final times = tester
+        .widgetList<Text>(
+          find.descendant(
+            of: find.byType(PlayerMenuPanel),
+            matching: find.byType(Text),
+          ),
+        )
+        .map((t) => t.data)
+        .whereType<String>()
+        .where((d) => RegExp(r'^\d+:\d{2}$').hasMatch(d))
+        .toList();
+    expect(times, hasLength(2));
+    expect(times.first, times.last, reason: 'one click, one time');
 
-    await tester.tap(find.text('设置为片尾'));
+    await tester.tap(find.text('片尾从此开始'));
     await tester.pump(const Duration(milliseconds: 100));
 
     // Menu closes; the marker lands on THIS episode as a manual edit, at the

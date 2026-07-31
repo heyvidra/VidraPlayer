@@ -22,6 +22,7 @@ import '../core/state/states.dart';
 import '../utils/chapter_probe.dart';
 import '../utils/event_control.dart';
 import '../utils/log.dart';
+import '../utils/util.dart';
 import 'delegates/resume_delegate.dart';
 import 'delegates/skip_delegate.dart';
 import '../core/events/player_lifecycle_event.dart';
@@ -802,6 +803,7 @@ class PlayerController {
         play: play,
         getPlayerSetting: () => effectiveSkipSetting,
         autoPlay: config.behavior.autoPlay,
+        resumeMode: config.behavior.resumeMode,
       );
     } catch (e) {
       logger.e('[PlayerController] Resume check failed: $e');
@@ -824,12 +826,93 @@ class PlayerController {
     _uiManager.showControlsTemporarily();
   }
 
+  /// Close the "you've finished this episode" dialog and stay put.
+  ///
+  /// Deliberately does NOT play: this is the dialog's only "I'm done watching"
+  /// exit, and every one of its buttons used to start playback from 0:00 —
+  /// "cancel" replayed the episode just like "replay" did, which made the
+  /// choice a fake one and left no way to simply stop. Hiding the dialog also
+  /// re-enables the control bar (and with it the window close button), which
+  /// is IgnorePointer-blocked while any dialog is up.
   Future<void> dismissReplayDialog() async {
     if (_isDisposed) return;
 
     _uiManager.hideReplayDialog();
-    await play();
     _uiManager.showControlsTemporarily();
+  }
+
+  /// Dismiss the non-blocking resume card. Playback is already running at the
+  /// restored position, so this only takes the card away.
+  void dismissResumeHint() {
+    if (_isDisposed) return;
+    _uiManager.hideResumeHint();
+  }
+
+  /// Start this episode over from the beginning, from the resume card.
+  Future<void> restartFromResumeHint() async {
+    if (_isDisposed) return;
+    _uiManager.hideResumeHint();
+    await restartPlayback();
+  }
+
+  /// Close the resume prompt without starting playback. The dialog otherwise
+  /// only offers "continue" or "start over" — both of which play — so there was
+  /// no way to back out and drive the controls yourself.
+  ///
+  /// Parks the playhead ON the remembered position first. Hiding the dialog
+  /// clears resumeState and nothing else in the UI shows where the viewer had
+  /// got to, so dismissing from 0:00 would strand them at the start with the
+  /// only record of "32:15" gone from the screen — and the first position tick
+  /// would then write 0 over the stored history, which is exactly the overwrite
+  /// the resume-check gate in _loadEpisode exists to prevent.
+  Future<void> dismissResumeDialog() async {
+    if (_isDisposed) return;
+
+    final resume = _uiManager.currentVisibility.resumeState;
+    if (resume != null && resume.positionMillis > 0) {
+      await seek(
+        Duration(milliseconds: resume.positionMillis),
+        SeekSource.external,
+      );
+      if (_isDisposed) return;
+    }
+    _uiManager.hideResumeDialog();
+    _uiManager.showControlsTemporarily();
+  }
+
+  /// Keys the modal resume/replay dialogs answer to: Enter takes the primary
+  /// action, Escape backs out without playing, everything else — space very
+  /// much included — is swallowed so it can't reach the blocked player behind
+  /// the dialog.
+  ///
+  /// Space is deliberately NOT a confirm key here. It means play/pause
+  /// everywhere else in the player, so binding it to "replay this episode"
+  /// would trade one surprise (silent playback behind the dialog) for another
+  /// (an episode restarting from 0:00 because the user reached for pause).
+  void _handleDialogShortcut(String shortcut, {required bool isReplay}) {
+    switch (shortcut) {
+      case 'enter':
+        if (isReplay) {
+          // Finished an episode: the next one is what the viewer wants when
+          // there is one, replaying this one is the fallback.
+          if (hasNextEpisode) {
+            playNextEpisodeFromReplay();
+          } else {
+            replayEpisode();
+          }
+        } else {
+          final resume = _uiManager.currentVisibility.resumeState;
+          if (resume != null) continuePlayback(resume.positionMillis);
+        }
+      case 'escape':
+        if (isReplay) {
+          dismissReplayDialog();
+        } else {
+          dismissResumeDialog();
+        }
+      default:
+        break;
+    }
   }
 
   PlayerSetting get playerSetting =>
@@ -873,6 +956,9 @@ class PlayerController {
     _mediaManager.updateSkipOutro(duration);
   }
 
+  /// What [setSkipPoint] replaced, so [undoSkipPoint] can put it back.
+  ({EpisodeMarkers? markers, int skipIntro, int skipOutro})? _skipPointUndo;
+
   /// A user placing a skip point by hand (the progress bar's right-click menu).
   ///
   /// Writes BOTH layers on purpose:
@@ -888,6 +974,13 @@ class PlayerController {
   void setSkipPoint({Duration? introEnd, Duration? outroStart}) {
     if (_isDisposed) return;
 
+    final previous = playerSetting;
+    _skipPointUndo = (
+      markers: currentMarkers,
+      skipIntro: previous.skipIntro,
+      skipOutro: previous.skipOutro,
+    );
+
     setEpisodeMarkers(introEnd: introEnd, outroStart: outroStart);
 
     if (introEnd != null) {
@@ -896,7 +989,70 @@ class PlayerController {
     if (outroStart != null) {
       final tail = _lastPosition.duration - outroStart;
       updateSkipOutro(tail.isNegative ? 0 : tail.inSeconds);
+
+      // Marking the outro at or behind the playhead satisfies the auto-skip
+      // condition on the very next tick, so the episode would cut away the
+      // instant the menu closed — no warning, and it reads as the player
+      // breaking. Treat this episode's outro as already handled; the value
+      // still applies from the next episode on, exactly like the intro does.
+      if (outroStart <= _lastPosition.position) {
+        _hasSkippedOutro = true;
+      }
     }
+
+    _uiManager.showMarkerSetNotification(
+      localization.translate(
+        introEnd != null ? 'marker_set_intro' : 'marker_set_outro',
+        args: {'time': Util.formatDuration(introEnd ?? outroStart!)},
+      ),
+    );
+  }
+
+  /// Put back whatever [setSkipPoint] overwrote. Backs the confirmation's undo
+  /// button: a misplaced marker is otherwise only reversible through the
+  /// settings menu's ±5s stepper, which is 240 taps for a 20-minute mistake.
+  void undoSkipPoint() {
+    if (_isDisposed) return;
+    final undo = _skipPointUndo;
+    if (undo == null) return;
+    _skipPointUndo = null;
+
+    _mediaManager.updateEpisodeMarkers(
+      undo.markers ??
+          EpisodeMarkers(episodeIndex: media.currentEpisodeIndex, clear: true),
+    );
+    updateSkipIntro(undo.skipIntro);
+    updateSkipOutro(undo.skipOutro);
+    _uiManager.hideSkipNotification();
+  }
+
+  /// Drop every skip point for this video: the episode's marker and the
+  /// series-wide seconds alike. Without it a wrong value can only be walked
+  /// back 5 seconds at a time, and a marker cannot be removed at all.
+  void clearSkipPoints() {
+    if (_isDisposed) return;
+
+    _skipPointUndo = (
+      markers: currentMarkers,
+      skipIntro: playerSetting.skipIntro,
+      skipOutro: playerSetting.skipOutro,
+    );
+
+    _mediaManager.updateEpisodeMarkers(
+      EpisodeMarkers(episodeIndex: media.currentEpisodeIndex, clear: true),
+    );
+    updateSkipIntro(0);
+    updateSkipOutro(0);
+    _uiManager.hideSkipNotification();
+  }
+
+  /// Whether anything is currently set for this episode — drives whether the
+  /// right-click menu bothers offering "clear".
+  bool get hasSkipPoints {
+    final markers = currentMarkers;
+    return playerSetting.skipIntro > 0 ||
+        playerSetting.skipOutro > 0 ||
+        (markers != null && !markers.isEmpty);
   }
 
   /// Mark the intro end and/or outro start for one episode (defaults to the
@@ -914,13 +1070,16 @@ class PlayerController {
   }) {
     if (_isDisposed) return;
     final index = episodeIndex ?? media.currentEpisodeIndex;
+    // A cleared marker is not a base to merge onto — treat it as absent, or
+    // "clear then set the intro" would resurrect the outro that was erased.
     final existing = media.episodeMarkers[index];
+    final base = (existing == null || existing.clear) ? null : existing;
     _mediaManager.updateEpisodeMarkers(
       EpisodeMarkers(
         episodeIndex: index,
-        introStart: introStart ?? existing?.introStart,
-        introEnd: introEnd ?? existing?.introEnd,
-        outroStart: outroStart ?? existing?.outroStart,
+        introStart: introStart ?? base?.introStart,
+        introEnd: introEnd ?? base?.introEnd,
+        outroStart: outroStart ?? base?.outroStart,
         source: source,
       ),
     );
@@ -1029,6 +1188,19 @@ class PlayerController {
 
   void handleKeyboardShortcut(String shortcut) {
     if (_isDisposed) return;
+
+    // A resume/replay dialog is modal: the control bars behind it are
+    // IgnorePointer-blocked, so a shortcut that slipped through would act on a
+    // player the user can no longer reach — pressing space (the most reflexive
+    // "just play it" key) started playback from 0:00 UNDER the dialog, with no
+    // way to pause, seek or dismiss. Route the dialog's own keys, swallow the
+    // rest.
+    final dialog = _uiManager.currentVisibility;
+    if (dialog.showResumeDialog || dialog.showReplayDialog) {
+      _handleDialogShortcut(shortcut, isReplay: dialog.showReplayDialog);
+      return;
+    }
+
     _uiManager.handleKeyboardInteraction();
     switch (shortcut) {
       case 'space':
@@ -1266,10 +1438,16 @@ class PlayerController {
     final isResumeDialogShowing = visibility.showResumeDialog;
     final isReplayDialogShowing = visibility.showReplayDialog;
 
+    // position > 0 matches the three saveProgressImmediate sites, which have
+    // always guarded it. Without it any moment the player legitimately sits at
+    // 0:00 with history on file — a dismissed resume prompt, a fresh load that
+    // slipped the gate — writes that 0 straight over the stored position, and
+    // a run under 30s stops offering to resume at all.
     if (!_pendingResumeCheck &&
         !_isSwitchingEpisode &&
         !isResumeDialogShowing &&
         !isReplayDialogShowing &&
+        state.position > Duration.zero &&
         media.video != null &&
         media.currentEpisode != null) {
       unawaited(

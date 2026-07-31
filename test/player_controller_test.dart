@@ -258,7 +258,11 @@ PlayerController _buildController({
   return PlayerController(
     config: PlayerConfig(
       features: features,
-      behavior: const PlayerBehavior(autoPlay: false),
+      // Modal resume is opt-in now; these cases assert the dialog.
+      behavior: const PlayerBehavior(
+        autoPlay: false,
+        resumeMode: ResumeMode.prompt,
+      ),
     ),
     player: player,
     windowDelegate: windowDelegate,

@@ -127,11 +127,19 @@ class VidraLocalization {
       'timeout_seconds': 'Timeout: {seconds} seconds',
 
       // Settings
-      'auto_skip_opening': 'Auto Skip Opening',
+      // Key name is legacy (hosts may override it via customTranslations);
+      // the switch has always gated BOTH intro and outro skipping.
+      'auto_skip_opening': 'Auto Skip Intro & Outro',
       'skip_opening': 'Skip Opening',
       'skip_ending': 'Skip Ending',
-      'set_as_opening': 'Set as Opening End',
-      'set_as_ending': 'Set as Ending Start',
+      'resumed_from': 'Resumed from {time}',
+      'play_from_start': 'Play from start',
+      'marker_set_intro': 'Intro now ends at {time}',
+      'marker_set_outro': 'Outro now starts at {time}',
+      'clear_markers': 'Clear skip points',
+      'undo': 'Undo',
+      'set_as_opening': 'Intro ends here',
+      'set_as_ending': 'Outro starts here',
 
       // Keyboard shortcuts
       'shortcut_fullscreen': 'Fullscreen',
@@ -250,11 +258,17 @@ class VidraLocalization {
       'timeout_seconds': '超时: {seconds}秒',
 
       // Settings
-      'auto_skip_opening': '跳过片头/片尾',
+      'auto_skip_opening': '自动跳过片头/片尾',
       'skip_opening': '跳过片头',
       'skip_ending': '跳过片尾',
-      'set_as_opening': '设置为片头',
-      'set_as_ending': '设置为片尾',
+      'resumed_from': '已从 {time} 继续播放',
+      'play_from_start': '从头播放',
+      'marker_set_intro': '片头设为到 {time}',
+      'marker_set_outro': '片尾设为从 {time} 开始',
+      'clear_markers': '清除跳过设置',
+      'undo': '撤销',
+      'set_as_opening': '片头到此结束',
+      'set_as_ending': '片尾从此开始',
 
       // Keyboard shortcuts
       'shortcut_fullscreen': '全屏',
@@ -373,11 +387,17 @@ class VidraLocalization {
       'timeout_seconds': '逾時: {seconds}秒',
 
       // Settings
-      'auto_skip_opening': '自動跳過片頭',
+      'auto_skip_opening': '自動跳過片頭/片尾',
       'skip_opening': '跳過片頭',
       'skip_ending': '跳過片尾',
-      'set_as_opening': '設置為片頭',
-      'set_as_ending': '設置為片尾',
+      'resumed_from': '已從 {time} 繼續播放',
+      'play_from_start': '從頭播放',
+      'marker_set_intro': '片頭設為到 {time}',
+      'marker_set_outro': '片尾設為從 {time} 開始',
+      'clear_markers': '清除跳過設定',
+      'undo': '復原',
+      'set_as_opening': '片頭到此結束',
+      'set_as_ending': '片尾從此開始',
 
       // Keyboard shortcuts
       'shortcut_fullscreen': '全螢幕',

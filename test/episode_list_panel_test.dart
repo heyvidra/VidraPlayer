@@ -125,15 +125,15 @@ class _FakeVideoPlayer implements IVideoPlayer {
 }
 
 VideoEpisode _episode(int i) => VideoEpisode(
-      index: i,
-      title: '第${i + 1}集',
-      qualities: [
-        VideoQuality(
-          label: '1080p',
-          source: VideoSource.network('https://example.com/v$i.mp4'),
-        ),
-      ],
-    );
+  index: i,
+  title: '第${i + 1}集',
+  qualities: [
+    VideoQuality(
+      label: '1080p',
+      source: VideoSource.network('https://example.com/v$i.mp4'),
+    ),
+  ],
+);
 
 PlayerController _buildController(IVideoPlayer player) {
   return PlayerController(
@@ -193,17 +193,24 @@ void main() {
     await tester.tap(button.first, warnIfMissed: false);
     await tester.pump(const Duration(milliseconds: 400)); // slide-in
 
-    expect(controller.visibility.showEpisodeList, isTrue,
-        reason: 'panel state must flip on');
-    expect(find.byType(EpisodeList), findsOneWidget,
-        reason: 'panel widget must be mounted');
+    expect(
+      controller.visibility.showEpisodeList,
+      isTrue,
+      reason: 'panel state must flip on',
+    );
+    expect(
+      find.byType(EpisodeList),
+      findsOneWidget,
+      reason: 'panel widget must be mounted',
+    );
 
     await controller.dispose();
     await tester.pump();
   });
 
-  testWidgets('tapping an episode switches and closes the panel',
-      (tester) async {
+  testWidgets('tapping an episode switches and closes the panel', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(1280, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -225,10 +232,16 @@ void main() {
     // Let the switch settle (load + play are fake-fast).
     await tester.pump(const Duration(milliseconds: 600));
 
-    expect(controller.media.currentEpisodeIndex, 1,
-        reason: 'switch must land on episode 2');
-    expect(controller.visibility.showEpisodeList, isFalse,
-        reason: 'panel must close after selection');
+    expect(
+      controller.media.currentEpisodeIndex,
+      1,
+      reason: 'switch must land on episode 2',
+    );
+    expect(
+      controller.visibility.showEpisodeList,
+      isFalse,
+      reason: 'panel must close after selection',
+    );
 
     await controller.dispose();
     await tester.pump();
@@ -246,24 +259,32 @@ void main() {
       addTearDown(tester.view.reset);
 
       final player = _FakeVideoPlayer();
-      final controller = await _pumpPlayer(tester, player,
-          platform: TargetPlatform.macOS);
+      final controller = await _pumpPlayer(
+        tester,
+        player,
+        platform: TargetPlatform.macOS,
+      );
 
       await controller.play();
       controller.showControls();
       await tester.pump(const Duration(milliseconds: 400));
 
-      final button =
-          find.byKey(const ValueKey('top_bar_episode_list_button'));
-      expect(button, findsOneWidget,
-          reason: 'desktop episodes IconButton must render');
+      final button = find.byKey(const ValueKey('top_bar_episode_list_button'));
+      expect(
+        button,
+        findsOneWidget,
+        reason: 'desktop episodes IconButton must render',
+      );
 
       await tester.tap(button, warnIfMissed: false);
       await tester.pump(); // deliver emission, start slide
       await tester.pump(const Duration(milliseconds: 350)); // finish slide
 
-      expect(controller.visibility.showEpisodeList, isTrue,
-          reason: 'top-right tap must open the panel');
+      expect(
+        controller.visibility.showEpisodeList,
+        isTrue,
+        reason: 'top-right tap must open the panel',
+      );
       expect(find.byType(EpisodeList), findsOneWidget);
 
       await controller.dispose();
@@ -276,46 +297,67 @@ void main() {
       addTearDown(tester.view.reset);
 
       final player = _FakeVideoPlayer();
-      final controller = await _pumpPlayer(tester, player,
-          platform: TargetPlatform.macOS);
+      final controller = await _pumpPlayer(
+        tester,
+        player,
+        platform: TargetPlatform.macOS,
+      );
 
       await controller.play();
       controller.showControls();
       await tester.pump(const Duration(milliseconds: 400));
 
-      expect(find.byIcon(Icons.pause), findsWidgets,
-          reason: 'playing state must show pause icon(s)');
+      expect(
+        find.byIcon(Icons.pause),
+        findsWidgets,
+        reason: 'playing state must show pause icon(s)',
+      );
 
       // Tap the center pause button.
       await tester.tap(find.byIcon(Icons.pause).first, warnIfMissed: false);
       await tester.pump(const Duration(milliseconds: 300));
 
-      expect(controller.lifecycle.isPlaying, isFalse,
-          reason: 'playback must actually pause');
-      expect(find.byIcon(Icons.play_arrow), findsWidgets,
-          reason: 'button must flip to play icon after pausing');
+      expect(
+        controller.lifecycle.isPlaying,
+        isFalse,
+        reason: 'playback must actually pause',
+      );
+      expect(
+        find.byIcon(Icons.play_arrow),
+        findsWidgets,
+        reason: 'button must flip to play icon after pausing',
+      );
 
       // And back.
-      await tester.tap(find.byIcon(Icons.play_arrow).first,
-          warnIfMissed: false);
+      await tester.tap(
+        find.byIcon(Icons.play_arrow).first,
+        warnIfMissed: false,
+      );
       await tester.pump(const Duration(milliseconds: 300));
       expect(controller.lifecycle.isPlaying, isTrue);
-      expect(find.byIcon(Icons.pause), findsWidgets,
-          reason: 'button must flip back to pause icon');
+      expect(
+        find.byIcon(Icons.pause),
+        findsWidgets,
+        reason: 'button must flip back to pause icon',
+      );
 
       await controller.dispose();
       await tester.pump();
     });
 
-    testWidgets('shown controls sit at full fade opacity (not dimmed)',
-        (tester) async {
+    testWidgets('shown controls sit at full fade opacity (not dimmed)', (
+      tester,
+    ) async {
       tester.view.physicalSize = const Size(1280, 800);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.reset);
 
       final player = _FakeVideoPlayer();
-      final controller = await _pumpPlayer(tester, player,
-          platform: TargetPlatform.macOS);
+      final controller = await _pumpPlayer(
+        tester,
+        player,
+        platform: TargetPlatform.macOS,
+      );
 
       await controller.play();
       // Hide, then re-show: exercises the fade both ways.
@@ -330,8 +372,11 @@ void main() {
           .toList();
       expect(fades, isNotEmpty);
       for (final fade in fades) {
-        expect(fade.opacity.value, anyOf(0.0, 1.0),
-            reason: 'no fade may be stuck mid-way after settling');
+        expect(
+          fade.opacity.value,
+          anyOf(0.0, 1.0),
+          reason: 'no fade may be stuck mid-way after settling',
+        );
       }
 
       await controller.dispose();
@@ -345,66 +390,91 @@ void main() {
     // dialog, which owns the screen — control bars are hidden AND
     // IgnorePointer-blocked until it closes (auto-close default 10s).
     testWidgets(
-        'while the dialog is up controls stay hidden — even on keypress — '
-        'and come back interactive after continuing', (tester) async {
-      tester.view.physicalSize = const Size(1280, 800);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
+      'while the dialog is up controls stay hidden — even on keypress — '
+      'and come back interactive after continuing',
+      (tester) async {
+        tester.view.physicalSize = const Size(1280, 800);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
 
-      final player = _FakeVideoPlayer();
-      final controller = PlayerController(
-        config: const PlayerConfig(
-          features: PlayerFeatures(enableHistory: true),
-          behavior: PlayerBehavior(autoPlay: true),
-        ),
-        player: player,
-        video: const VideoMetadata(
-          id: 'v1',
-          title: 'Test Video',
-          coverUrl: 'http://test.com/cover.jpg',
-        ),
-        episodes: [_episode(0), _episode(1)],
-        mediaRepository: _SeededRepository(const [
-          EpisodeHistory(index: 0, positionMillis: 45000, durationMillis: 120000),
-        ]),
-      );
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: ThemeData(platform: TargetPlatform.macOS),
-          home: Scaffold(body: VideoPlayerWidget(controller: controller)),
-        ),
-      );
-      // Startup: load + 100ms resume-delegate delay + history read.
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pump(const Duration(milliseconds: 300));
+        final player = _FakeVideoPlayer();
+        final controller = PlayerController(
+          config: const PlayerConfig(
+            features: PlayerFeatures(enableHistory: true),
+            // This group is specifically about the MODAL prompt; the default
+            // is now the non-blocking card.
+            behavior: PlayerBehavior(
+              autoPlay: true,
+              resumeMode: ResumeMode.prompt,
+            ),
+          ),
+          player: player,
+          video: const VideoMetadata(
+            id: 'v1',
+            title: 'Test Video',
+            coverUrl: 'http://test.com/cover.jpg',
+          ),
+          episodes: [_episode(0), _episode(1)],
+          mediaRepository: _SeededRepository(const [
+            EpisodeHistory(
+              index: 0,
+              positionMillis: 45000,
+              durationMillis: 120000,
+            ),
+          ]),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: ThemeData(platform: TargetPlatform.macOS),
+            home: Scaffold(body: VideoPlayerWidget(controller: controller)),
+          ),
+        );
+        // Startup: load + 100ms resume-delegate delay + history read.
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(milliseconds: 300));
 
-      expect(controller.visibility.showResumeDialog, isTrue,
-          reason: 'mid-progress history must prompt resume at startup');
-      expect(find.byType(ResumeDialog), findsOneWidget);
-      expect(controller.visibility.showControls, isFalse,
-          reason: 'dialog owns the screen — control bars must be hidden, '
-              'not visible-but-unclickable');
+        expect(
+          controller.visibility.showResumeDialog,
+          isTrue,
+          reason: 'mid-progress history must prompt resume at startup',
+        );
+        expect(find.byType(ResumeDialog), findsOneWidget);
+        expect(
+          controller.visibility.showControls,
+          isFalse,
+          reason:
+              'dialog owns the screen — control bars must be hidden, '
+              'not visible-but-unclickable',
+        );
 
-      // A keypress during the dialog must NOT summon the (pointer-dead)
-      // control bars.
-      controller.handleKeyboardShortcut('m');
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(controller.visibility.showControls, isFalse,
-          reason: 'keyboard interaction must not paint dead controls '
-              'behind the dialog');
+        // A keypress during the dialog must NOT summon the (pointer-dead)
+        // control bars.
+        controller.handleKeyboardShortcut('m');
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(
+          controller.visibility.showControls,
+          isFalse,
+          reason:
+              'keyboard interaction must not paint dead controls '
+              'behind the dialog',
+        );
 
-      // Continue playback (what the countdown/继续播放 button does).
-      await controller.continuePlayback(45000);
-      await tester.pump(const Duration(milliseconds: 200));
+        // Continue playback (what the countdown/继续播放 button does).
+        await controller.continuePlayback(45000);
+        await tester.pump(const Duration(milliseconds: 200));
 
-      expect(controller.visibility.showResumeDialog, isFalse);
-      expect(controller.visibility.showControls, isTrue,
-          reason: 'controls must return after the dialog closes');
-      expect(controller.lifecycle.isPlaying, isTrue);
+        expect(controller.visibility.showResumeDialog, isFalse);
+        expect(
+          controller.visibility.showControls,
+          isTrue,
+          reason: 'controls must return after the dialog closes',
+        );
+        expect(controller.lifecycle.isPlaying, isTrue);
 
-      await controller.dispose();
-      await tester.pump();
-    });
+        await controller.dispose();
+        await tester.pump();
+      },
+    );
   });
 
   testWidgets('toggle button closes an open panel', (tester) async {
@@ -426,8 +496,11 @@ void main() {
 
     await tester.tap(button.first, warnIfMissed: false);
     await tester.pump(const Duration(milliseconds: 400));
-    expect(controller.visibility.showEpisodeList, isFalse,
-        reason: 'second tap must close the panel');
+    expect(
+      controller.visibility.showEpisodeList,
+      isFalse,
+      reason: 'second tap must close the panel',
+    );
 
     await controller.dispose();
     await tester.pump();

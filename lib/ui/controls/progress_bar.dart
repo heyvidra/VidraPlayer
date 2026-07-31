@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../../controller/player_controller.dart';
@@ -65,6 +67,13 @@ class _VideoProgressBarState extends State<VideoProgressBar>
 
   OverlayEntry? _markerMenu;
 
+  // Markers arrive on the media stream, not the position stream, so the paint
+  // -only path the rest of this widget is built around can't see them. This is
+  // the one extra subscription — it setStates only when the drawn values
+  // actually move, so it costs nothing per tick.
+  StreamSubscription<MediaContextState>? _mediaSub;
+  EpisodeMarkers? _markers;
+
   // Snapshot of the last seen position state. Structural fields (duration,
   // buffered, isLive) trigger setState when they change; the position itself
   // never does — it flows into [_currentPosition] paint-only.
@@ -100,6 +109,16 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     if (widget.thumbVisible) {
       _toggleController.value = 1.0;
     }
+
+    final controller = widget.controller;
+    if (controller != null) {
+      _markers = controller.currentMarkers;
+      _mediaSub = controller.mediaStream.listen((state) {
+        final next = state.episodeMarkers[state.currentEpisodeIndex];
+        if (next == _markers) return;
+        if (mounted) setState(() => _markers = next);
+      });
+    }
   }
 
   @override
@@ -112,6 +131,7 @@ class _VideoProgressBarState extends State<VideoProgressBar>
       widget.controller?.showControlsTemporarily();
     }
     _closeMarkerMenu();
+    _mediaSub?.cancel();
     widget.positionListenable.removeListener(_onPositionChanged);
     _toggleController.dispose();
     _hoverController.dispose();
@@ -272,6 +292,12 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                             handleColor: widget.handleColor ?? Colors.red,
                             barHeight: widget.barHeight,
                             handleRadius: widget.handleRadius,
+                            introEndMs: _drawnMarkers?.introEnd?.inMilliseconds
+                                .toDouble(),
+                            outroStartMs: _drawnMarkers
+                                ?.outroStart
+                                ?.inMilliseconds
+                                .toDouble(),
                           ),
                         ),
                       ),
@@ -331,6 +357,13 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     );
   }
 
+  /// The markers to draw. A cleared record means "nothing here", not "these
+  /// null fields merge onto whatever was drawn before".
+  EpisodeMarkers? get _drawnMarkers {
+    final m = _markers;
+    return (m == null || m.clear) ? null : m;
+  }
+
   /// Right-click menu: mark the clicked time as the intro end or the outro
   /// start. skipIntro is seconds from the start, skipOutro seconds from the end
   /// (see SkipDelegate), so the outro value is the remainder.
@@ -350,10 +383,11 @@ class _VideoProgressBarState extends State<VideoProgressBar>
       maxDurationMs: maxDuration,
     );
     if (marks == null) return;
-    // fromStart is the clicked time; fromEnd is the tail after it. Markers are
-    // absolute, so BOTH entries record fromStart — fromEnd is only shown, so
-    // the outro entry reads "this much will be skipped".
-    final (intro: fromStart, outro: fromEnd) = marks;
+    // Both entries record — and display — the SAME clicked time. Showing the
+    // intro row as an absolute time and the outro row as a remaining duration
+    // made the two rows read against different baselines, which cost users a
+    // beat of arithmetic to work out they had clicked one spot, not two.
+    final (intro: fromStart, outro: _) = marks;
     final clicked = Duration(seconds: fromStart);
 
     final l10n = controller.localization;
@@ -411,7 +445,7 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                         leading: const Icon(Icons.last_page),
                         text: l10n.translate('set_as_ending'),
                         trailing: Text(
-                          Util.formatDuration(Duration(seconds: fromEnd)),
+                          Util.formatDuration(clicked),
                           style: const TextStyle(
                             color: Colors.white70,
                             fontSize: 12,
@@ -423,6 +457,19 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                         },
                         theme: theme,
                       ),
+                      // Only worth offering when there is something to remove.
+                      // Until now a wrong value could only be walked back 5
+                      // seconds at a time, and a marker not at all.
+                      if (controller.hasSkipPoints)
+                        PlayerMenuItem(
+                          leading: const Icon(Icons.layers_clear),
+                          text: l10n.translate('clear_markers'),
+                          onTap: () {
+                            _closeMarkerMenu();
+                            controller.clearSkipPoints();
+                          },
+                          theme: theme,
+                        ),
                     ],
                   ),
                 ),
@@ -595,6 +642,12 @@ class ProgressBarPainter extends CustomPainter {
   final double barHeight;
   final double handleRadius;
 
+  /// Absolute times of the configured skip boundaries, in ms. Drawn as bands so
+  /// a skip point placed by right-click is verifiable at a glance — before this
+  /// the only way to confirm one had registered was to reopen a menu.
+  final double? introEndMs;
+  final double? outroStartMs;
+
   ProgressBarPainter({
     required this.position,
     required this.duration,
@@ -607,6 +660,8 @@ class ProgressBarPainter extends CustomPainter {
     required this.handleColor,
     required this.barHeight,
     required this.handleRadius,
+    this.introEndMs,
+    this.outroStartMs,
   }) : super(
          repaint: Listenable.merge([position, toggleAnimation, hoverAnimation]),
        );
@@ -681,7 +736,35 @@ class ProgressBarPainter extends CustomPainter {
       playedPaint,
     );
 
-    // 4. Draw Handle
+    // 4. Draw skip bands. On TOP of the played fill, or a watched intro would
+    // hide the band that proves the setting took. Kept low-alpha and inset so
+    // it annotates the track rather than competing with progress.
+    if (introEndMs != null || outroStartMs != null) {
+      final Paint markerPaint = Paint()
+        ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.45);
+      void band(double startMs, double endMs) {
+        final left = (startMs / duration).clamp(0.0, 1.0) * size.width;
+        final right = (endMs / duration).clamp(0.0, 1.0) * size.width;
+        if (right - left < 1.0) return;
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(
+              left,
+              centerY - currentHeight / 2,
+              right - left,
+              currentHeight,
+            ),
+            Radius.circular(currentHeight / 2),
+          ),
+          markerPaint,
+        );
+      }
+
+      if (introEndMs != null) band(0, introEndMs!);
+      if (outroStartMs != null) band(outroStartMs!, duration);
+    }
+
+    // 5. Draw Handle
     if (toggleValue > 0) {
       final Paint handlePaint = Paint()
         ..color = handleColor.withValues(alpha: toggleValue);

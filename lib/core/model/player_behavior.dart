@@ -1,5 +1,19 @@
 import 'package:flutter/material.dart';
 
+/// How a video with watch history reopens.
+enum ResumeMode {
+  /// Pick up where they left off and say so in a corner, without taking the
+  /// screen. The default: a viewer opening episode 12 for the second night
+  /// running has already answered "continue?" by opening it.
+  auto,
+
+  /// Ask first, modally. What the player did before [auto] existed.
+  prompt,
+
+  /// [prompt], but the dialog resumes on its own after a few seconds.
+  promptWithCountdown,
+}
+
 /// Behavior Configuration
 @immutable
 class PlayerBehavior {
@@ -20,6 +34,7 @@ class PlayerBehavior {
   final double minBufferDuration;
   final double maxBufferDuration;
   final bool enableThumbnail;
+  final ResumeMode resumeMode;
 
   const PlayerBehavior({
     this.autoHideDelay = const Duration(seconds: 3),
@@ -39,6 +54,7 @@ class PlayerBehavior {
     this.minBufferDuration = 2.0,
     this.maxBufferDuration = 10.0,
     this.enableThumbnail = true,
+    this.resumeMode = ResumeMode.auto,
   });
 
   PlayerBehavior copyWith({
@@ -59,6 +75,7 @@ class PlayerBehavior {
     double? minBufferDuration,
     double? maxBufferDuration,
     bool? enableThumbnail,
+    ResumeMode? resumeMode,
   }) {
     return PlayerBehavior(
       autoHideDelay: autoHideDelay ?? this.autoHideDelay,
@@ -79,6 +96,7 @@ class PlayerBehavior {
       minBufferDuration: minBufferDuration ?? this.minBufferDuration,
       maxBufferDuration: maxBufferDuration ?? this.maxBufferDuration,
       enableThumbnail: enableThumbnail ?? this.enableThumbnail,
+      resumeMode: resumeMode ?? this.resumeMode,
     );
   }
 
@@ -103,27 +121,29 @@ class PlayerBehavior {
             initialVolume == other.initialVolume &&
             minBufferDuration == other.minBufferDuration &&
             maxBufferDuration == other.maxBufferDuration &&
-            enableThumbnail == other.enableThumbnail;
+            enableThumbnail == other.enableThumbnail &&
+            resumeMode == other.resumeMode;
   }
 
   @override
   int get hashCode => Object.hashAll([
-        autoHideDelay,
-        mouseHideDelay,
-        hoverShowDelay,
-        progressSaveInterval,
-        bufferSize,
-        pauseOnWindowLoseFocus,
-        pauseOnMinimize,
-        resumeOnFocus,
-        showControlsOnHover,
-        hideMouseWhenIdle,
-        autoPlay,
-        loop,
-        muteOnStart,
-        initialVolume,
-        minBufferDuration,
-        maxBufferDuration,
-        enableThumbnail,
-      ]);
+    autoHideDelay,
+    mouseHideDelay,
+    hoverShowDelay,
+    progressSaveInterval,
+    bufferSize,
+    pauseOnWindowLoseFocus,
+    pauseOnMinimize,
+    resumeOnFocus,
+    showControlsOnHover,
+    hideMouseWhenIdle,
+    autoPlay,
+    loop,
+    muteOnStart,
+    initialVolume,
+    minBufferDuration,
+    maxBufferDuration,
+    enableThumbnail,
+    resumeMode,
+  ]);
 }

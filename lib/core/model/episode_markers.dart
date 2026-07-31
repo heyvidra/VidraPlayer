@@ -29,12 +29,20 @@ class EpisodeMarkers {
 
   final MarkerSource source;
 
+  /// Marks this as a deliberate erasure rather than "nothing set yet".
+  ///
+  /// Needed because every merge path here is `new ?? existing`, which can add
+  /// or move a boundary but can never take one away — without this flag a
+  /// mistaken marker is unremovable.
+  final bool clear;
+
   const EpisodeMarkers({
     required this.episodeIndex,
     this.introStart,
     this.introEnd,
     this.outroStart,
     this.source = MarkerSource.manual,
+    this.clear = false,
   });
 
   bool get isEmpty => introEnd == null && outroStart == null;
@@ -58,6 +66,7 @@ class EpisodeMarkers {
     Duration? introEnd,
     Duration? outroStart,
     MarkerSource? source,
+    bool? clear,
   }) {
     return EpisodeMarkers(
       episodeIndex: episodeIndex ?? this.episodeIndex,
@@ -65,6 +74,7 @@ class EpisodeMarkers {
       introEnd: introEnd ?? this.introEnd,
       outroStart: outroStart ?? this.outroStart,
       source: source ?? this.source,
+      clear: clear ?? this.clear,
     );
   }
 
@@ -76,11 +86,18 @@ class EpisodeMarkers {
           introStart == other.introStart &&
           introEnd == other.introEnd &&
           outroStart == other.outroStart &&
-          source == other.source;
+          source == other.source &&
+          clear == other.clear;
 
   @override
-  int get hashCode =>
-      Object.hash(episodeIndex, introStart, introEnd, outroStart, source);
+  int get hashCode => Object.hash(
+    episodeIndex,
+    introStart,
+    introEnd,
+    outroStart,
+    source,
+    clear,
+  );
 
   @override
   String toString() =>

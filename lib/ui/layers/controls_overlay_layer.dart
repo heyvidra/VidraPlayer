@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../controller/player_controller.dart';
+import '../../core/model/player_behavior.dart';
 import '../../core/state/states.dart';
 import '../overlays/episode_list.dart';
 import '../overlays/resume_dialog.dart';
@@ -12,10 +13,7 @@ import '../widget/slide_panel.dart';
 class ControlsOverlayLayer extends StatelessWidget {
   final PlayerController controller;
 
-  const ControlsOverlayLayer({
-    super.key,
-    required this.controller,
-  });
+  const ControlsOverlayLayer({super.key, required this.controller});
 
   @override
   Widget build(BuildContext context) {
@@ -40,10 +38,35 @@ class ControlsOverlayLayer extends StatelessWidget {
                 duration: Duration(
                   milliseconds: ui.resumeState!.durationMillis,
                 ),
-                autoClose: !controller.config.behavior.resumeOnFocus,
+                // Was wired to resumeOnFocus, which has nothing to do with
+                // countdowns and meant nobody could find the switch.
+                autoClose:
+                    controller.config.behavior.resumeMode ==
+                    ResumeMode.promptWithCountdown,
                 onResume: () =>
                     controller.continuePlayback(ui.resumeState!.positionMillis),
                 onRestart: () => controller.restartPlayback(),
+              ),
+
+            // 3b. Non-blocking resume card. Sits in a corner ABOVE nothing —
+            // no barrier, no IgnorePointer — because playback is already
+            // running at the restored position; this only reports it and
+            // offers the way back to 0:00.
+            if (ui.resumeHint != null)
+              Positioned(
+                left: 0,
+                bottom: 72,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 380),
+                  child: InlineResumePrompt(
+                    controller: controller,
+                    position: Duration(
+                      milliseconds: ui.resumeHint!.positionMillis,
+                    ),
+                    onRestart: controller.restartFromResumeHint,
+                    onDismiss: controller.dismissResumeHint,
+                  ),
+                ),
               ),
 
             // 4. Replay Dialog (重播提示)
@@ -76,22 +99,22 @@ class ControlsOverlayLayer extends StatelessWidget {
               child: IgnorePointer(
                 ignoring: !ui.showEpisodeList,
                 child: SlidePanel(
-                child: ui.showEpisodeList
-                    ? EpisodeList(
-                        key: const ValueKey('EpisodeListPanel'),
-                        controller: controller,
-                        episodes: controller.media.episodes,
-                        histories: controller.media.episodeHistory,
-                        onClose: () => controller.hideEpisodeList(),
-                        currentEpisodeIndex:
-                            controller.media.currentEpisodeIndex,
-                        onEpisodeSelected: (int index) {
-                          controller.switchEpisode(index);
-                          controller.hideEpisodeList();
-                        },
-                        episodesSort: controller.config.episodesSort,
-                      )
-                    : const SizedBox.shrink(),
+                  child: ui.showEpisodeList
+                      ? EpisodeList(
+                          key: const ValueKey('EpisodeListPanel'),
+                          controller: controller,
+                          episodes: controller.media.episodes,
+                          histories: controller.media.episodeHistory,
+                          onClose: () => controller.hideEpisodeList(),
+                          currentEpisodeIndex:
+                              controller.media.currentEpisodeIndex,
+                          onEpisodeSelected: (int index) {
+                            controller.switchEpisode(index);
+                            controller.hideEpisodeList();
+                          },
+                          episodesSort: controller.config.episodesSort,
+                        )
+                      : const SizedBox.shrink(),
                 ),
               ),
             ),

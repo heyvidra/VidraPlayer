@@ -442,6 +442,20 @@ class UIStateManager {
     );
   }
 
+  /// The non-blocking counterpart to [showResumeDialog]: playback has already
+  /// been restored, this only says so. Dismissal is the card's own job — it
+  /// owns its timer — so there is no manager-side timer to leak here.
+  void showResumeHint(ResumeState state) {
+    if (_isDisposed) return;
+    _updateVisibility(_visibility.copyWith(resumeHint: state));
+  }
+
+  void hideResumeHint() {
+    if (_isDisposed) return;
+    if (_visibility.resumeHint == null) return;
+    _updateVisibility(_visibility.copyWith(forceClearResumeHint: true));
+  }
+
   void showSkipIntroNotification() {
     if (_isDisposed) return;
 
@@ -488,6 +502,27 @@ class UIStateManager {
       hideSkipNotification();
     });
     return true;
+  }
+
+  /// Confirm a hand-placed skip point, e.g. "片头 01:30". Sits in the same slot
+  /// as the skip prompts (directly above the progress bar the user just
+  /// right-clicked) and pulls the controls back up, because the confirmation is
+  /// worthless if it lands on a hidden bar.
+  void showMarkerSetNotification(String label) {
+    if (_isDisposed) return;
+
+    _skipNotificationTimer?.cancel();
+    _updateVisibility(
+      _visibility.copyWith(
+        skipNotification: SkipNotificationType.markerSet,
+        markerLabel: label,
+      ),
+    );
+    _showControlsTemporarily();
+
+    _skipNotificationTimer = Timer(const Duration(seconds: 5), () {
+      hideSkipNotification();
+    });
   }
 
   void hideSkipNotification() {

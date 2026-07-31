@@ -421,26 +421,31 @@ class ReplayDialog extends StatelessWidget {
 }
 
 /// Inline Resume Prompt
+/// The corner card shown after playback has ALREADY resumed.
+///
+/// Deliberately a statement with one escape, not a question with two answers:
+/// by the time it appears the video is running at the remembered position, so
+/// a "continue" button would do nothing and reading it as a choice is what
+/// made the old shape confusing. It also drops the mini progress bar the
+/// question-shaped version carried — the real progress bar sits directly below
+/// this card showing the same position, and two of them read as a stray line.
 class InlineResumePrompt extends StatefulWidget {
-  final PlayerController controller; // Added
+  final PlayerController controller;
   final Duration position;
-  final Duration duration;
-  final VoidCallback onResume;
   final VoidCallback onRestart;
   final VoidCallback onDismiss;
-  final bool autoDismiss;
+
+  /// Long enough to read a sentence and decide, not so long it outstays the
+  /// controls. 5s was too quick to do either.
   final Duration autoDismissDelay;
 
   const InlineResumePrompt({
     super.key,
-    required this.controller, // Added
+    required this.controller,
     required this.position,
-    required this.duration,
-    required this.onResume,
     required this.onRestart,
     required this.onDismiss,
-    this.autoDismiss = true,
-    this.autoDismissDelay = const Duration(seconds: 5),
+    this.autoDismissDelay = const Duration(seconds: 9),
   });
 
   @override
@@ -448,159 +453,80 @@ class InlineResumePrompt extends StatefulWidget {
 }
 
 class _InlineResumePromptState extends State<InlineResumePrompt> {
-  late Timer _dismissTimer;
+  Timer? _dismissTimer;
 
   @override
   void initState() {
     super.initState();
-
-    if (widget.autoDismiss) {
-      _dismissTimer = Timer(widget.autoDismissDelay, () {
-        if (mounted) {
-          widget.onDismiss();
-        }
-      });
-    }
+    _dismissTimer = Timer(widget.autoDismissDelay, () {
+      if (mounted) widget.onDismiss();
+    });
   }
 
   @override
   void dispose() {
-    _dismissTimer.cancel();
+    _dismissTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = widget.controller.config.theme;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-      padding: const EdgeInsets.all(12.0),
+      padding: const EdgeInsets.fromLTRB(12.0, 6.0, 6.0, 6.0),
       decoration: BoxDecoration(
-        color: widget.controller.config.theme.backgroundColor.withAlpha(
-          222,
-        ), // ~87%
+        color: theme.backgroundColor.withAlpha(222),
         borderRadius: BorderRadius.circular(8.0),
-        border: Border.all(
-          color: widget.controller.config.theme.textColor.withAlpha(30),
-        ),
+        border: Border.all(color: theme.textColor.withAlpha(30)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Row(
-            children: [
-              Icon(
-                Icons.history,
-                color: widget.controller.config.theme.iconColor.withAlpha(179),
-                size: 16.0,
-              ),
-              const SizedBox(width: 8.0),
-              Expanded(
-                child: Text(
-                  '${widget.controller.localization.translate('last_watched_at')} ${Util.formatDuration(widget.position)}',
-                  style: TextStyle(
-                    color: widget.controller.config.theme.textColor,
-                    fontSize: 14.0,
-                  ),
-                ),
-              ),
-              // IconButton for an accessible ≥48dp tap target + semantics,
-              // instead of a bare 16px GestureDetector.
-              IconButton(
-                onPressed: widget.onDismiss,
-                tooltip: widget.controller.localization.translate('close'),
-                visualDensity: VisualDensity.compact,
-                icon: Icon(
-                  Icons.close,
-                  color: widget.controller.config.theme.iconColorDisabled,
-                  size: 16.0,
-                ),
-              ),
-            ],
+          Icon(
+            Icons.history,
+            color: theme.iconColor.withAlpha(179),
+            size: 16.0,
           ),
-
-          const SizedBox(height: 8.0),
-
-          // Progress Bar
-          Container(
-            height: 2.0,
-            decoration: BoxDecoration(
-              color: Colors.white12,
-              borderRadius: BorderRadius.circular(1.0),
-            ),
-            child: Stack(
-              children: [
-                Container(
-                  width: _getProgressWidth(),
-                  decoration: BoxDecoration(
-                    color: widget.controller.config.theme.primaryColor,
-                    borderRadius: BorderRadius.circular(1.0),
-                  ),
-                ),
-              ],
+          const SizedBox(width: 8.0),
+          Flexible(
+            child: Text(
+              widget.controller.localization.translate(
+                'resumed_from',
+                args: {'time': Util.formatDuration(widget.position)},
+              ),
+              style: TextStyle(color: theme.textColor, fontSize: 13.0),
             ),
           ),
-
-          const SizedBox(height: 12.0),
-
-          Row(
-            children: [
-              // Continue Playback Button
-              ElevatedButton(
-                onPressed: () {
-                  _dismissTimer.cancel();
-                  widget.onResume();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0,
-                    vertical: 8.0,
-                  ),
-                  minimumSize: const Size(0, 32),
-                ),
-                child: Text(
-                  widget.controller.localization.translate('continue_playback'),
-                  style: const TextStyle(fontSize: 12.0),
-                ),
+          const SizedBox(width: 4.0),
+          TextButton(
+            onPressed: () {
+              _dismissTimer?.cancel();
+              widget.onRestart();
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: theme.progressBarColor,
+              minimumSize: const Size(0, 30),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Text(
+              widget.controller.localization.translate('play_from_start'),
+              style: const TextStyle(
+                fontSize: 13.0,
+                fontWeight: FontWeight.w600,
               ),
-
-              const SizedBox(width: 8.0),
-
-              // Restart Button
-              OutlinedButton(
-                onPressed: () {
-                  _dismissTimer.cancel();
-                  widget.onRestart();
-                },
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white70,
-                  side: BorderSide(color: Colors.white30),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16.0,
-                    vertical: 8.0,
-                  ),
-                  minimumSize: const Size(0, 32),
-                ),
-                child: Text(
-                  widget.controller.localization.translate('restart'),
-                  style: const TextStyle(fontSize: 12.0),
-                ),
-              ),
-            ],
+            ),
+          ),
+          IconButton(
+            onPressed: widget.onDismiss,
+            tooltip: widget.controller.localization.translate('close'),
+            visualDensity: VisualDensity.compact,
+            icon: Icon(Icons.close, color: theme.iconColorDisabled, size: 16.0),
           ),
         ],
       ),
     );
-  }
-
-  double _getProgressWidth() {
-    final totalWidth = MediaQuery.of(context).size.width - 56; // 减去边距和内边距
-    final progress = widget.duration.inMilliseconds > 0
-        ? widget.position.inMilliseconds / widget.duration.inMilliseconds
-        : 0.0;
-
-    return progress * totalWidth;
   }
 }
 

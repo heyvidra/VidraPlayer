@@ -5,7 +5,17 @@ import 'resume.dart';
 /// menu for setting skip points — it shares this slot because it occupies the
 /// same spot above the bar and never coexists with a real skip (it only fires
 /// when nothing is configured).
-enum SkipNotificationType { none, intro, outro, markerHint }
+enum SkipNotificationType {
+  none,
+  intro,
+  outro,
+  markerHint,
+
+  /// A skip point was just placed by hand. Carries [UIVisibilityState.markerLabel]
+  /// and offers an undo — setting one used to produce no visible change at all,
+  /// so the only way to tell it had worked was to reopen the settings menu.
+  markerSet,
+}
 
 @immutable
 class UIVisibilityState {
@@ -18,6 +28,10 @@ class UIVisibilityState {
   final bool showLoadingIndicator;
   final SkipNotificationType skipNotification;
 
+  /// Human-readable description of the marker just set, e.g. "片头 01:30".
+  /// Only meaningful with [SkipNotificationType.markerSet].
+  final String? markerLabel;
+
   const UIVisibilityState({
     this.showControls = false,
     this.showMouseCursor = true,
@@ -27,13 +41,23 @@ class UIVisibilityState {
     this.showErrorDialog = false,
     this.showLoadingIndicator = false,
     this.skipNotification = SkipNotificationType.none,
+    this.markerLabel,
     this.resumeState,
     this.replayState,
+    this.resumeHint,
     this.seekFeedback,
   });
 
   final ResumeState? resumeState;
   final ResumeState? replayState;
+
+  /// The non-blocking "picked up where you left off" card.
+  ///
+  /// Deliberately NOT folded into [showResumeDialog]: that flag is read in a
+  /// dozen places as "a modal owns the screen" — it blanks the control bars
+  /// behind an IgnorePointer, swallows every keyboard shortcut, and stops
+  /// periodic progress saves. A hint must do none of those things.
+  final ResumeState? resumeHint;
   final Duration? seekFeedback;
 
   UIVisibilityState copyWith({
@@ -45,10 +69,13 @@ class UIVisibilityState {
     bool? showErrorDialog,
     bool? showLoadingIndicator,
     SkipNotificationType? skipNotification,
+    String? markerLabel,
     ResumeState? resumeState,
     ResumeState? replayState,
+    ResumeState? resumeHint,
     Duration? seekFeedback,
     bool forceClearSeekFeedback = false,
+    bool forceClearResumeHint = false,
     bool forceClearResumeState = false,
     bool forceClearReplayState = false,
   }) {
@@ -61,6 +88,7 @@ class UIVisibilityState {
       showErrorDialog: showErrorDialog ?? this.showErrorDialog,
       showLoadingIndicator: showLoadingIndicator ?? this.showLoadingIndicator,
       skipNotification: skipNotification ?? this.skipNotification,
+      markerLabel: markerLabel ?? this.markerLabel,
       // Nullable fields can't be cleared via `field: null` (copyWith's ??
       // swallows it) — the forceClear flags are the explicit clear channel.
       resumeState: forceClearResumeState
@@ -69,6 +97,7 @@ class UIVisibilityState {
       replayState: forceClearReplayState
           ? null
           : (replayState ?? this.replayState),
+      resumeHint: forceClearResumeHint ? null : (resumeHint ?? this.resumeHint),
       seekFeedback: forceClearSeekFeedback
           ? null
           : (seekFeedback ?? this.seekFeedback),
@@ -88,8 +117,10 @@ class UIVisibilityState {
             showErrorDialog == other.showErrorDialog &&
             showLoadingIndicator == other.showLoadingIndicator &&
             skipNotification == other.skipNotification &&
+            markerLabel == other.markerLabel &&
             resumeState == other.resumeState &&
             replayState == other.replayState &&
+            resumeHint == other.resumeHint &&
             seekFeedback == other.seekFeedback;
   }
 
@@ -103,8 +134,10 @@ class UIVisibilityState {
     showErrorDialog,
     showLoadingIndicator,
     skipNotification,
+    markerLabel,
     resumeState,
     replayState,
+    resumeHint,
     seekFeedback,
   );
 

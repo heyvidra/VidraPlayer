@@ -116,9 +116,7 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
             // 5. UI Controls & Overlays
             LayoutId(
               id: 'controls',
-              child: ControlsOverlayLayer(
-                controller: widget.controller,
-              ),
+              child: ControlsOverlayLayer(controller: widget.controller),
             ),
           ],
         ),
@@ -204,6 +202,15 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       widget.controller.handleKeyboardShortcut('l');
     } else if (key == LogicalKeyboardKey.escape) {
       widget.controller.handleKeyboardShortcut('escape');
+    } else if (key == LogicalKeyboardKey.enter ||
+        key == LogicalKeyboardKey.numpadEnter) {
+      // Enter belongs to the modal dialogs and nothing else. Claiming it the
+      // rest of the time would report it handled while doing nothing — which
+      // swallows the host app's own Enter binding and stops a Tab-focused
+      // control from ever activating. Hand it back when no dialog is up.
+      final ui = widget.controller.visibility;
+      if (!ui.showResumeDialog && !ui.showReplayDialog) return false;
+      widget.controller.handleKeyboardShortcut('enter');
     } else if (key == LogicalKeyboardKey.period ||
         key == LogicalKeyboardKey.greater) {
       widget.controller.handleKeyboardShortcut('>');

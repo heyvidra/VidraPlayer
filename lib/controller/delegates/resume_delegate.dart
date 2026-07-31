@@ -4,6 +4,7 @@ import 'dart:async';
 import '../../managers/media_manager.dart';
 import '../../managers/ui_manager.dart';
 import '../../core/state/states.dart';
+import '../../core/model/player_behavior.dart';
 import '../../core/model/player_setting.dart';
 import '../../utils/log.dart';
 
@@ -39,6 +40,7 @@ class ResumeDelegate {
     required Future<void> Function() play,
     required PlayerSetting Function() getPlayerSetting,
     required bool autoPlay,
+    required ResumeMode resumeMode,
   }) async {
     if (isDisposed() || !isInitialized) {
       return;
@@ -84,11 +86,30 @@ class ResumeDelegate {
           // Stay paused (fire-and-forget: dialog is already showing)
           unawaited(pause());
         } else if (history.positionMillis > minRestoreMillis) {
-          // Valid mid-progress: Show resume dialog
-          _uiManager.hideControlsImmediately();
-          _uiManager.showResumeDialog(resumeState);
-          // Stay paused (fire-and-forget: dialog is already showing)
-          unawaited(pause());
+          if (resumeMode == ResumeMode.auto) {
+            // Opening episode 12 for the second night running already answers
+            // "continue?". Restore the position, say so in a corner, and stay
+            // out of the way — the card carries the "start over" escape.
+            //
+            // Awaited on purpose: _pendingResumeCheck only clears in the
+            // caller's finally, and it is the sole thing stopping a position-0
+            // tick from overwriting the very history being restored.
+            await seek(
+              Duration(milliseconds: history.positionMillis),
+              SeekSource.external,
+            );
+            if (isDisposed()) return;
+            _uiManager.showResumeHint(resumeState);
+            if (autoPlay) await play();
+            if (isDisposed()) return;
+            _uiManager.showControlsTemporarily();
+          } else {
+            // Valid mid-progress: Show resume dialog
+            _uiManager.hideControlsImmediately();
+            _uiManager.showResumeDialog(resumeState);
+            // Stay paused (fire-and-forget: dialog is already showing)
+            unawaited(pause());
+          }
         } else {
           // Progress too short: Auto-skip intro or start from beginning
           await _handleIntroSkip(
