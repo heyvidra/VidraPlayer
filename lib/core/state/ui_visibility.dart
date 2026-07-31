@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'resume.dart';
 
-enum SkipNotificationType { none, intro, outro }
+/// markerHint is the one-off nudge that the progress bar has a right-click
+/// menu for setting skip points — it shares this slot because it occupies the
+/// same spot above the bar and never coexists with a real skip (it only fires
+/// when nothing is configured).
+enum SkipNotificationType { none, intro, outro, markerHint }
 
 @immutable
 class UIVisibilityState {
@@ -91,18 +95,18 @@ class UIVisibilityState {
 
   @override
   int get hashCode => Object.hash(
-        showControls,
-        showMouseCursor,
-        showEpisodeList,
-        showResumeDialog,
-        showReplayDialog,
-        showErrorDialog,
-        showLoadingIndicator,
-        skipNotification,
-        resumeState,
-        replayState,
-        seekFeedback,
-      );
+    showControls,
+    showMouseCursor,
+    showEpisodeList,
+    showResumeDialog,
+    showReplayDialog,
+    showErrorDialog,
+    showLoadingIndicator,
+    skipNotification,
+    resumeState,
+    replayState,
+    seekFeedback,
+  );
 
   @override
   String toString() {

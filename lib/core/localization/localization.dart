@@ -130,6 +130,8 @@ class VidraLocalization {
       'auto_skip_opening': 'Auto Skip Opening',
       'skip_opening': 'Skip Opening',
       'skip_ending': 'Skip Ending',
+      'set_as_opening': 'Set as Opening End',
+      'set_as_ending': 'Set as Ending Start',
 
       // Keyboard shortcuts
       'shortcut_fullscreen': 'Fullscreen',
@@ -147,6 +149,7 @@ class VidraLocalization {
       // Notifications
       'skipping_intro': 'Skipping intro...',
       'skipping_outro': 'Preparing to skip outro...',
+      'marker_hint': 'Tip: right-click the progress bar to set skip points',
 
       // Added for cleanup
       'switching_to_quality': 'Switching to {quality}...',
@@ -250,6 +253,8 @@ class VidraLocalization {
       'auto_skip_opening': '跳过片头/片尾',
       'skip_opening': '跳过片头',
       'skip_ending': '跳过片尾',
+      'set_as_opening': '设置为片头',
+      'set_as_ending': '设置为片尾',
 
       // Keyboard shortcuts
       'shortcut_fullscreen': '全屏',
@@ -267,6 +272,7 @@ class VidraLocalization {
       // Notifications
       'skipping_intro': '正在跳过开头...',
       'skipping_outro': '正在准备跳过结尾，进入下一集',
+      'marker_hint': '提示：右键进度条可设置跳过片头/片尾',
 
       // Added for cleanup
       'switching_to_quality': '正在切换到 {quality}...',
@@ -370,6 +376,8 @@ class VidraLocalization {
       'auto_skip_opening': '自動跳過片頭',
       'skip_opening': '跳過片頭',
       'skip_ending': '跳過片尾',
+      'set_as_opening': '設置為片頭',
+      'set_as_ending': '設置為片尾',
 
       // Keyboard shortcuts
       'shortcut_fullscreen': '全螢幕',
@@ -387,6 +395,7 @@ class VidraLocalization {
       // Notifications
       'skipping_intro': '正在跳過開頭...',
       'skipping_outro': '正在準備跳過結尾，進入下一集',
+      'marker_hint': '提示：右鍵進度條可設置跳過片頭/片尾',
 
       // Added for cleanup
       'switching_to_quality': '正在切換到 {quality}...',

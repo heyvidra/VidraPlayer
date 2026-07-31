@@ -174,72 +174,12 @@ class _DropdownMenuState extends State<VDropdownMenu>
   }
 
   Widget _buildMenuPanel() {
-    final screenSize = ScreenHelper.getScreenSize(context);
-    final theme = widget.theme;
-
-    Widget panelContent = Container(
-      constraints: BoxConstraints(maxHeight: screenSize.height * 0.6),
-      decoration: BoxDecoration(
-        color: widget.useBlur
-            ? theme.dialogBackgroundColor.withValues(alpha: 0.6)
-            : theme.dialogBackgroundColor.withValues(alpha: 0.95),
-        borderRadius: widget.theme.borderRadius != BorderRadius.zero
-            ? widget.theme.borderRadius
-            : BorderRadius.circular(12),
-        border: Border.all(
-          color: theme.dialogBackgroundColor.withValues(alpha: 0.5),
-        ),
-        // boxShadow: [
-        //   BoxShadow(
-        //     // color: theme.dialogBackgroundColor.withValues(alpha: 0.4),
-        //     // blurRadius: 10,
-        //     // spreadRadius: 5,
-        //   ),
-        // ],
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Optional title
-          if (widget.title != null) ...[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  widget.title!,
-                  style: TextStyle(
-                    color: theme.dialogTextColor,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-            Divider(color: theme.textColor.withValues(alpha: 0.1), height: 1),
-          ],
-          // Menu items
-          Flexible(
-            child: ScrollConfiguration(
-              behavior: NoScrollbarBehavior(),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: widget.menuBuilder(context, _closeMenu),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return PlayerMenuPanel(
+      theme: widget.theme,
+      useBlur: widget.useBlur,
+      title: widget.title,
+      children: widget.menuBuilder(context, _closeMenu),
     );
-
-    if (widget.useBlur) {
-      return BlurPanel(child: panelContent);
-    }
-
-    return panelContent;
   }
 
   Alignment _getTargetAnchor() {
@@ -284,6 +224,83 @@ class _DropdownMenuState extends State<VDropdownMenu>
             : GestureDetector(onTap: _toggleMenu, child: widget.child),
       ),
     );
+  }
+}
+
+/// The floating panel every player menu is drawn in. Split out of
+/// [VDropdownMenu] so menus that aren't anchored to a trigger button (the
+/// progress bar's right-click menu) look identical instead of re-deriving the
+/// blur / radius / colours.
+class PlayerMenuPanel extends StatelessWidget {
+  final List<Widget> children;
+  final PlayerUITheme theme;
+  final bool useBlur;
+  final String? title;
+
+  const PlayerMenuPanel({
+    super.key,
+    required this.children,
+    this.theme = const PlayerUITheme.dark(),
+    this.useBlur = true,
+    this.title,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final screenSize = ScreenHelper.getScreenSize(context);
+
+    final Widget panelContent = Container(
+      constraints: BoxConstraints(maxHeight: screenSize.height * 0.6),
+      decoration: BoxDecoration(
+        color: useBlur
+            ? theme.dialogBackgroundColor.withValues(alpha: 0.6)
+            : theme.dialogBackgroundColor.withValues(alpha: 0.95),
+        borderRadius: theme.borderRadius != BorderRadius.zero
+            ? theme.borderRadius
+            : BorderRadius.circular(12),
+        border: Border.all(
+          color: theme.dialogBackgroundColor.withValues(alpha: 0.5),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Optional title
+          if (title != null) ...[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  title!,
+                  style: TextStyle(
+                    color: theme.dialogTextColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+            Divider(color: theme.textColor.withValues(alpha: 0.1), height: 1),
+          ],
+          // Menu items
+          Flexible(
+            child: ScrollConfiguration(
+              behavior: NoScrollbarBehavior(),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: children,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return useBlur ? BlurPanel(child: panelContent) : panelContent;
   }
 }
 

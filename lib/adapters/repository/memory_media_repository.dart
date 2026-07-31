@@ -1,8 +1,10 @@
 import '../../core/interfaces/media_repository.dart';
 import '../../core/model/model.dart';
-class MemoryMediaRepository implements MediaRepository {
+
+class MemoryMediaRepository implements MediaRepository, EpisodeMarkerStore {
   final Map<String, Map<int, EpisodeHistory>> _history = {};
   final Map<String, PlayerSetting> _settings = {};
+  final Map<String, Map<int, EpisodeMarkers>> _markers = {};
 
   @override
   Future<List<EpisodeHistory>> getEpisodeHistories({
@@ -40,5 +42,18 @@ class MemoryMediaRepository implements MediaRepository {
       return PlayerSetting(videoId: videoId);
     }
     return _settings[key]!;
+  }
+
+  @override
+  Future<List<EpisodeMarkers>> getEpisodeMarkers({
+    required String videoId,
+  }) async => _markers[videoId]?.values.toList() ?? const [];
+
+  @override
+  Future<void> saveEpisodeMarkers(
+    String videoId,
+    EpisodeMarkers markers,
+  ) async {
+    (_markers[videoId] ??= {})[markers.episodeIndex] = markers;
   }
 }

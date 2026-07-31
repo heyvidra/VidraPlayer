@@ -1,5 +1,6 @@
 export 'video_metadata.dart';
 export 'video_episode.dart';
+export 'episode_markers.dart';
 export 'video_quality.dart';
 export 'player_error.dart';
 export 'buffer_range.dart';

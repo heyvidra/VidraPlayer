@@ -7,6 +7,7 @@ import '../widget/reveal_animation.dart';
 import 'center_play_button.dart';
 import 'top_bar.dart';
 import 'bottom_bar.dart';
+import 'skip_prompt.dart';
 
 /// Desktop video control panel
 class DesktopVideoControls extends StatelessWidget {
@@ -124,7 +125,7 @@ class DesktopVideoControls extends StatelessWidget {
       },
       child: type == SkipNotificationType.none
           ? const SizedBox.shrink(key: ValueKey('none'))
-          : _buildPromptContent(type),
+          : SkipPrompt(controller: controller, type: type),
     );
   }
 
@@ -186,61 +187,6 @@ class DesktopVideoControls extends StatelessWidget {
                 ),
               ),
             ),
-    );
-  }
-
-  Widget _buildPromptContent(SkipNotificationType type) {
-    final theme = controller.config.theme;
-    final isIntro = type == SkipNotificationType.intro;
-    final text = isIntro
-        ? controller.localization.translate('skipping_intro')
-        : controller.localization.translate('skipping_outro');
-
-    return Padding(
-      key: ValueKey(type),
-      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8.0),
-      child: Align(
-        alignment: isIntro ? Alignment.centerLeft : Alignment.centerRight,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-          decoration: BoxDecoration(
-            color: theme.backgroundColor.withValues(alpha: 0.8),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(
-              color: theme.iconColor.withValues(alpha: 0.15),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.25),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (isIntro) ...[
-                Icon(Icons.skip_next, color: theme.iconColor, size: 18),
-                const SizedBox(width: 8),
-              ],
-              Text(
-                text,
-                style: TextStyle(
-                  color: theme.textColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-              if (!isIntro) ...[
-                const SizedBox(width: 8),
-                Icon(Icons.skip_next, color: theme.iconColor, size: 18),
-              ],
-            ],
-          ),
-        ),
-      ),
     );
   }
 }

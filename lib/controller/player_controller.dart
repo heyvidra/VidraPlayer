@@ -19,6 +19,7 @@ import '../managers/window_event_manager.dart';
 import '../core/interfaces/video_player.dart';
 import '../core/model/model.dart';
 import '../core/state/states.dart';
+import '../utils/chapter_probe.dart';
 import '../utils/event_control.dart';
 import '../utils/log.dart';
 import 'delegates/resume_delegate.dart';
@@ -128,6 +129,7 @@ class PlayerController {
   bool _isSwitchingQuality = false;
   bool _isSkippingOutro = false; // Currently executing a skip action
   bool _hasSkippedOutro = false; // Already skipped for this episode
+  bool _hintedMarkerSetup = false; // The right-click hint fired once already
 
   // Subscriptions
   StreamSubscription<PlaybackLifecycleState>? _lifecycleSub;
@@ -406,11 +408,9 @@ class PlayerController {
   Future<void> restartPlayback() async {
     if (_isDisposed) return;
 
-    if (playerSetting.autoSkip && playerSetting.skipIntro > 0) {
-      await seek(
-        Duration(seconds: playerSetting.skipIntro),
-        SeekSource.external,
-      );
+    final setting = effectiveSkipSetting;
+    if (setting.autoSkip && setting.skipIntro > 0) {
+      await seek(Duration(seconds: setting.skipIntro), SeekSource.external);
       _uiManager.showSkipIntroNotification();
     } else {
       await seek(Duration.zero, SeekSource.external);
@@ -501,7 +501,9 @@ class PlayerController {
               )
               .timeout(const Duration(seconds: 2))
               .catchError((Object e) {
-                logger.w('[PlayerController] Pre-switch progress save failed: $e');
+                logger.w(
+                  '[PlayerController] Pre-switch progress save failed: $e',
+                );
               }),
         );
       }
@@ -611,6 +613,14 @@ class PlayerController {
     if (switchEpisode) {
       await _playbackManager.resetPlayer();
     }
+
+    // Kick the chapter probe off in PARALLEL with opening the player: it's one
+    // playlist GET against a URL the player is about to fetch anyway, so by the
+    // time the (much slower) open finishes it has long since resolved, and
+    // awaiting it below costs nothing. Sequencing it before the resume check is
+    // what lets chapter markers apply on the first play, not the second.
+    final chapterProbe = _probeChapterMarkers(index);
+
     // Resolve from the single source authority (media state was already
     // advanced to this episode+quality before _loadEpisode ran).
     final ok = await _playbackManager.initialize(
@@ -643,8 +653,68 @@ class PlayerController {
     //     await play();
     //   }
     // }
+    await chapterProbe;
+    if (_isDisposed) return;
+
     // Check restore for new episode (flag was set at the top of this method)
     _checkResumePlayback(index);
+  }
+
+  /// Once per session, nudge the user that skip points can be set by
+  /// right-clicking the progress bar — but only for a video where nothing is
+  /// set, so it never fires at someone who already configured it.
+  ///
+  /// Deliberately a few seconds INTO playback rather than at load: position
+  /// only advances once nothing is blocking, so a resume/replay prompt has
+  /// been dealt with by then and the hint can't be spent on a frame nobody
+  /// sees. Desktop-only — there is no right-click to point at otherwise.
+  ///
+  /// Bounded to the opening minute so it reads as "here's a tip as you start
+  /// watching". Without the upper bound it also fires at the natural end of an
+  /// episode, on top of the auto-advance. A resumed episode starts past the
+  /// window and simply doesn't get hinted — the next one played from the top
+  /// will.
+  void _maybeHintMarkerSetup(PlaybackPositionState state) {
+    if (_hintedMarkerSetup || state.isLive) return;
+    if (!Platform.isMacOS && !Platform.isWindows && !Platform.isLinux) return;
+    if (state.position < const Duration(seconds: 4) ||
+        state.position > const Duration(seconds: 60)) {
+      return;
+    }
+
+    final markers = currentMarkers;
+    final configured =
+        playerSetting.skipIntro > 0 ||
+        playerSetting.skipOutro > 0 ||
+        (markers != null && !markers.isEmpty);
+    if (configured) {
+      // Nothing to teach — retire the hint for the rest of the session.
+      _hintedMarkerSetup = true;
+      return;
+    }
+
+    _hintedMarkerSetup = _uiManager.showMarkerHint();
+    if (_hintedMarkerSetup) {
+      logger.d('[PlayerController] showed the right-click marker hint');
+    }
+  }
+
+  /// Read intro/outro markers out of the media's own chapters, if it has any.
+  /// Never throws and never blocks for long — see [probeChapters].
+  Future<void> _probeChapterMarkers(int index) async {
+    // Anything already recorded (a manual edit, a previous probe) outranks
+    // this, so don't spend a request re-deriving it.
+    if (_mediaManager.state.episodeMarkers.containsKey(index)) return;
+
+    final url = _mediaManager.state.currentSource?.path;
+    if (url == null) return;
+
+    final markers = await probeChapters(url, index);
+    if (markers == null || _isDisposed) return;
+    if (_mediaManager.state.currentEpisodeIndex != index) return;
+
+    logger.d('[PlayerController] chapter markers for ep $index: $markers');
+    await _mediaManager.updateEpisodeMarkers(markers);
   }
 
   Future<void> playNextEpisode() async {
@@ -730,7 +800,7 @@ class PlayerController {
         seek: seek,
         pause: pause,
         play: play,
-        getPlayerSetting: () => playerSetting,
+        getPlayerSetting: () => effectiveSkipSetting,
         autoPlay: config.behavior.autoPlay,
       );
     } catch (e) {
@@ -765,6 +835,26 @@ class PlayerController {
   PlayerSetting get playerSetting =>
       media.playerSetting ?? PlayerSetting(videoId: media.video!.id);
 
+  /// Markers for the episode being played, if any.
+  EpisodeMarkers? get currentMarkers => media.currentMarkers;
+
+  /// What the skip logic must act on: [playerSetting] with skipIntro/skipOutro
+  /// replaced by this episode's markers when it has any. Markers are absolute
+  /// times while skipOutro is a tail length, hence the duration lookup.
+  ///
+  /// Everything downstream still sees a plain [PlayerSetting], so a host that
+  /// only ever sets the series-wide seconds is unaffected.
+  PlayerSetting get effectiveSkipSetting {
+    final markers = currentMarkers;
+    if (markers == null || markers.isEmpty) return playerSetting;
+    return playerSetting.copyWith(
+      skipIntro: markers.introEnd?.inSeconds,
+      skipOutro: markers.outroStart == null
+          ? null
+          : markers.outroTailSeconds(_lastPosition.duration),
+    );
+  }
+
   late final bool _autoPlayNext = config.features.enableAutoPlayNext;
   bool get autoPlayNext => _autoPlayNext;
 
@@ -781,6 +871,59 @@ class PlayerController {
   void updateSkipOutro(int duration) {
     if (_isDisposed) return;
     _mediaManager.updateSkipOutro(duration);
+  }
+
+  /// A user placing a skip point by hand (the progress bar's right-click menu).
+  ///
+  /// Writes BOTH layers on purpose:
+  /// - a manual marker on this episode, so it outranks any chapter/detected
+  ///   value that would otherwise win here;
+  /// - the series-wide [PlayerSetting], because that is what a viewer means by
+  ///   "the intro is 90 seconds" — every other episode should skip it too — and
+  ///   because it persists through [MediaRepository.savePlayerSettings], which
+  ///   every host implements. [EpisodeMarkerStore] is optional, so a marker
+  ///   alone would silently vanish on restart for most hosts.
+  ///
+  /// [outroStart] is absolute; skipOutro is a tail length, hence the duration.
+  void setSkipPoint({Duration? introEnd, Duration? outroStart}) {
+    if (_isDisposed) return;
+
+    setEpisodeMarkers(introEnd: introEnd, outroStart: outroStart);
+
+    if (introEnd != null) {
+      updateSkipIntro(introEnd.inSeconds < 0 ? 0 : introEnd.inSeconds);
+    }
+    if (outroStart != null) {
+      final tail = _lastPosition.duration - outroStart;
+      updateSkipOutro(tail.isNegative ? 0 : tail.inSeconds);
+    }
+  }
+
+  /// Mark the intro end and/or outro start for one episode (defaults to the
+  /// current one). Pass [MarkerSource.manual] — the default — for user edits;
+  /// they then survive any later chapter probe or detector run.
+  ///
+  /// For a user action prefer [setSkipPoint], which also updates the
+  /// series-wide setting so the value persists and covers the other episodes.
+  void setEpisodeMarkers({
+    Duration? introStart,
+    Duration? introEnd,
+    Duration? outroStart,
+    int? episodeIndex,
+    MarkerSource source = MarkerSource.manual,
+  }) {
+    if (_isDisposed) return;
+    final index = episodeIndex ?? media.currentEpisodeIndex;
+    final existing = media.episodeMarkers[index];
+    _mediaManager.updateEpisodeMarkers(
+      EpisodeMarkers(
+        episodeIndex: index,
+        introStart: introStart ?? existing?.introStart,
+        introEnd: introEnd ?? existing?.introEnd,
+        outroStart: outroStart ?? existing?.outroStart,
+        source: source,
+      ),
+    );
   }
 
   // ===============================================================
@@ -1046,6 +1189,8 @@ class PlayerController {
 
     _lastPosition = state;
 
+    _maybeHintMarkerSetup(state);
+
     // --- Auto Skip Outro Logic (delegated) ---
     if (!_isSkippingOutro && !_hasSkippedOutro && !state.isSeeking) {
       // Snapshot BEFORE the await: a successful skip advances the episode via
@@ -1056,7 +1201,7 @@ class PlayerController {
       final hadNextEpisode = hasNextEpisode;
       final skipped = await _skipDelegate.checkAndSkipOutro(
         position: state,
-        setting: playerSetting,
+        setting: effectiveSkipSetting,
         // Quality switches also hold the switch lock — attempting an
         // auto-advance during one would be silently dropped and then latch
         // _hasSkippedOutro, killing auto-advance for the whole episode.
@@ -1285,9 +1430,7 @@ class PlayerController {
   /// (constructor / [setEnableThumbnail] / [updateConfig]) can forget it.
   static PlayerConfig _normalizeConfig(PlayerConfig c) {
     if (!Platform.isMacOS && c.behavior.enableThumbnail) {
-      return c.copyWith(
-        behavior: c.behavior.copyWith(enableThumbnail: false),
-      );
+      return c.copyWith(behavior: c.behavior.copyWith(enableThumbnail: false));
     }
     return c;
   }

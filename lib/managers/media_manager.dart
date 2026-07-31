@@ -67,6 +67,7 @@ class MediaManager with LifecycleTokenProvider {
     if (episodes.isNotEmpty) {
       getAllHistories();
       getPlayerSettings();
+      loadEpisodeMarkers();
     }
   }
 
@@ -299,6 +300,60 @@ class MediaManager with LifecycleTokenProvider {
     _state = _state.copyWith(playerSetting: setting);
     safeEmit(_mediaCtrl, _state, token);
     return setting;
+  }
+
+  // ===============================================================
+  // Per-episode intro/outro markers
+  // ===============================================================
+
+  /// The repository's marker store, when it opted into one. An explicit cast
+  /// because [EpisodeMarkerStore] is not a subtype of [MediaRepository] — Dart
+  /// only promotes downward, so an `is` check alone wouldn't give access.
+  EpisodeMarkerStore? get _markerStore {
+    final repository = _repository;
+    return repository is EpisodeMarkerStore
+        ? repository as EpisodeMarkerStore
+        : null;
+  }
+
+  Future<void> loadEpisodeMarkers() async {
+    final token = lifecycleToken;
+    final store = _markerStore;
+    if (!token.isAlive || _state.video == null || store == null) return;
+
+    final markers = await store.getEpisodeMarkers(videoId: _state.video!.id);
+    if (!token.isAlive || markers.isEmpty) return;
+
+    _state = _state.copyWith(
+      episodeMarkers: {for (final m in markers) m.episodeIndex: m},
+    );
+    safeEmit(_mediaCtrl, _state, token);
+  }
+
+  /// Store markers for one episode. A lower-ranked source (a chapter probe, a
+  /// detector) never clobbers what the user placed by hand — see
+  /// [EpisodeMarkers.outranks].
+  Future<void> updateEpisodeMarkers(EpisodeMarkers markers) async {
+    final token = lifecycleToken;
+    if (!token.isAlive || _state.video == null) return;
+
+    final existing = _state.episodeMarkers[markers.episodeIndex];
+    if (existing != null && !markers.outranks(existing)) return;
+
+    _state = _state.copyWith(
+      episodeMarkers: {..._state.episodeMarkers, markers.episodeIndex: markers},
+    );
+    safeEmit(_mediaCtrl, _state, token);
+
+    // No store configured: markers still drive this session's skip logic, they
+    // just don't outlive it.
+    final store = _markerStore;
+    if (store == null) return;
+    try {
+      await store.saveEpisodeMarkers(_state.video!.id, markers);
+    } catch (e) {
+      logger.w('[MediaManager] Failed to persist episode markers: $e');
+    }
   }
 
   // ===============================================================

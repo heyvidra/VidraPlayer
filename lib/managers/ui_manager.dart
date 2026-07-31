@@ -462,6 +462,34 @@ class UIStateManager {
     );
   }
 
+  /// One-off nudge that the progress bar can be right-clicked to set skip
+  /// points. Returns whether it actually went up — the caller only spends its
+  /// single showing on a hint the user can see, so a dialog or an open panel
+  /// covering the bar means "not now, try the next episode".
+  ///
+  /// Also un-hides the controls: the hint points at the progress bar, so it is
+  /// meaningless without it.
+  bool showMarkerHint() {
+    if (_isDisposed) return false;
+    if (_visibility.showResumeDialog ||
+        _visibility.showReplayDialog ||
+        _visibility.showErrorDialog ||
+        _visibility.showEpisodeList) {
+      return false;
+    }
+
+    _skipNotificationTimer?.cancel();
+    _updateVisibility(
+      _visibility.copyWith(skipNotification: SkipNotificationType.markerHint),
+    );
+    _showControlsTemporarily();
+
+    _skipNotificationTimer = Timer(const Duration(seconds: 5), () {
+      hideSkipNotification();
+    });
+    return true;
+  }
+
   void hideSkipNotification() {
     if (_isDisposed) return;
 

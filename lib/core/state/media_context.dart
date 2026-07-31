@@ -11,6 +11,10 @@ class MediaContextState {
   final List<EpisodeHistory> episodeHistory;
   final PlayerSetting? playerSetting;
 
+  /// Per-episode intro/outro markers, keyed by episode index. Takes precedence
+  /// over [playerSetting]'s series-wide skipIntro/skipOutro.
+  final Map<int, EpisodeMarkers> episodeMarkers;
+
   const MediaContextState({
     this.video,
     this.episodes = const [],
@@ -18,6 +22,7 @@ class MediaContextState {
     this.currentQualityIndex = 0,
     this.episodeHistory = const [],
     this.playerSetting,
+    this.episodeMarkers = const {},
   });
 
   MediaContextState copyWith({
@@ -27,6 +32,7 @@ class MediaContextState {
     int? currentQualityIndex,
     List<EpisodeHistory>? episodeHistory,
     PlayerSetting? playerSetting,
+    Map<int, EpisodeMarkers>? episodeMarkers,
   }) {
     return MediaContextState(
       video: video ?? this.video,
@@ -35,8 +41,12 @@ class MediaContextState {
       currentQualityIndex: currentQualityIndex ?? this.currentQualityIndex,
       episodeHistory: episodeHistory ?? this.episodeHistory,
       playerSetting: playerSetting ?? this.playerSetting,
+      episodeMarkers: episodeMarkers ?? this.episodeMarkers,
     );
   }
+
+  /// Markers for the episode being played, if any were loaded or set.
+  EpisodeMarkers? get currentMarkers => episodeMarkers[currentEpisodeIndex];
 
   bool get hasNextEpisode => currentEpisodeIndex < episodes.length - 1;
 

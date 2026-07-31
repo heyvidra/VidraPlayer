@@ -4,6 +4,7 @@ import '../../controller/player_controller.dart';
 import '../../core/model/model.dart';
 import '../../core/state/states.dart';
 import '../../utils/util.dart';
+import '../widget/dropdown_menu.dart';
 import '../widget/thumbnail_preview.dart';
 
 class VideoProgressBar extends StatefulWidget {
@@ -62,6 +63,8 @@ class _VideoProgressBarState extends State<VideoProgressBar>
   late final AnimationController _hoverController;
   late final Animation<double> _hoverAnimation;
 
+  OverlayEntry? _markerMenu;
+
   // Snapshot of the last seen position state. Structural fields (duration,
   // buffered, isLive) trigger setState when they change; the position itself
   // never does — it flows into [_currentPosition] paint-only.
@@ -108,6 +111,7 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     if (_isHovering.value) {
       widget.controller?.showControlsTemporarily();
     }
+    _closeMarkerMenu();
     widget.positionListenable.removeListener(_onPositionChanged);
     _toggleController.dispose();
     _hoverController.dispose();
@@ -121,10 +125,7 @@ class _VideoProgressBarState extends State<VideoProgressBar>
   void didUpdateWidget(covariant VideoProgressBar oldWidget) {
     super.didUpdateWidget(oldWidget);
 
-    if (!identical(
-      oldWidget.positionListenable,
-      widget.positionListenable,
-    )) {
+    if (!identical(oldWidget.positionListenable, widget.positionListenable)) {
       oldWidget.positionListenable.removeListener(_onPositionChanged);
       widget.positionListenable.addListener(_onPositionChanged);
       _lastState = widget.positionListenable.value;
@@ -241,62 +242,73 @@ class _VideoProgressBarState extends State<VideoProgressBar>
           child: LayoutBuilder(
             builder: (context, constraints) {
               final barWidth = constraints.maxWidth;
-              return Stack(
-                clipBehavior: Clip.none,
-                children: [
-              // CustomPaint for zero-layout updates
-              Positioned.fill(
-                child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: widget.padding),
-                  child: CustomPaint(
-                    painter: ProgressBarPainter(
-                      position: _currentPosition,
-                      duration: maxDuration,
-                      buffered: _lastState.buffered,
-                      toggleAnimation: _toggleAnimation,
-                      hoverAnimation: _hoverAnimation,
-                      playedColor: widget.playedColor ?? Colors.red,
-                      bufferedColor: widget.bufferedColor ?? Colors.white38,
-                      backgroundColor: Colors.white24,
-                      handleColor: widget.handleColor ?? Colors.red,
-                      barHeight: widget.barHeight,
-                      handleRadius: widget.handleRadius,
+              return GestureDetector(
+                // Right-click marks the intro/outro boundary at the clicked
+                // time. Opaque so the padded edges of the bar are covered too.
+                behavior: HitTestBehavior.opaque,
+                onSecondaryTapDown: widget.controller == null
+                    ? null
+                    : (d) => _showMarkerMenu(context, d, barWidth, maxDuration),
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    // CustomPaint for zero-layout updates
+                    Positioned.fill(
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: widget.padding,
+                        ),
+                        child: CustomPaint(
+                          painter: ProgressBarPainter(
+                            position: _currentPosition,
+                            duration: maxDuration,
+                            buffered: _lastState.buffered,
+                            toggleAnimation: _toggleAnimation,
+                            hoverAnimation: _hoverAnimation,
+                            playedColor: widget.playedColor ?? Colors.red,
+                            bufferedColor:
+                                widget.bufferedColor ?? Colors.white38,
+                            backgroundColor: Colors.white24,
+                            handleColor: widget.handleColor ?? Colors.red,
+                            barHeight: widget.barHeight,
+                            handleRadius: widget.handleRadius,
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-              ),
 
-              // Invisible Slider for interactions
-              Padding(
-                padding: EdgeInsets.symmetric(horizontal: widget.padding),
-                child: SliderTheme(
-                  data: SliderThemeData(
-                    trackHeight: widget.barHeight * 2,
-                    trackShape: _ZeroPaddingTrackShape(),
-                    activeTrackColor: Colors.transparent,
-                    inactiveTrackColor: Colors.transparent,
-                    thumbColor: Colors.transparent,
-                    thumbShape: _InvisibleThumbShape(),
-                    overlayColor: Colors.transparent,
-                  ),
-                  child: ValueListenableBuilder<double>(
-                    valueListenable: _currentPosition,
-                    builder: (context, currentPos, _) {
-                      return Slider(
-                        padding: EdgeInsets.zero,
-                        value: currentPos.clamp(0.0, maxDuration),
-                        min: 0.0,
-                        max: maxDuration,
-                        onChanged: _handleSliderChanged,
-                        onChangeStart: _handleSliderChangeStart,
-                        onChangeEnd: _handleSliderChangeEnd,
-                      );
-                    },
-                  ),
+                    // Invisible Slider for interactions
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: widget.padding),
+                      child: SliderTheme(
+                        data: SliderThemeData(
+                          trackHeight: widget.barHeight * 2,
+                          trackShape: _ZeroPaddingTrackShape(),
+                          activeTrackColor: Colors.transparent,
+                          inactiveTrackColor: Colors.transparent,
+                          thumbColor: Colors.transparent,
+                          thumbShape: _InvisibleThumbShape(),
+                          overlayColor: Colors.transparent,
+                        ),
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: _currentPosition,
+                          builder: (context, currentPos, _) {
+                            return Slider(
+                              padding: EdgeInsets.zero,
+                              value: currentPos.clamp(0.0, maxDuration),
+                              min: 0.0,
+                              max: maxDuration,
+                              onChanged: _handleSliderChanged,
+                              onChangeStart: _handleSliderChangeStart,
+                              onChangeEnd: _handleSliderChangeEnd,
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    _buildHoverTooltipWrapper(maxDuration, barWidth),
+                  ],
                 ),
-              ),
-                  _buildHoverTooltipWrapper(maxDuration, barWidth),
-                ],
               );
             },
           ),
@@ -319,6 +331,121 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     );
   }
 
+  /// Right-click menu: mark the clicked time as the intro end or the outro
+  /// start. skipIntro is seconds from the start, skipOutro seconds from the end
+  /// (see SkipDelegate), so the outro value is the remainder.
+  void _showMarkerMenu(
+    BuildContext context,
+    TapDownDetails details,
+    double width,
+    double maxDuration,
+  ) {
+    final controller = widget.controller;
+    if (controller == null || maxDuration <= 0 || _markerMenu != null) return;
+
+    final marks = markerSecondsAt(
+      localDx: details.localPosition.dx,
+      width: width,
+      padding: widget.padding,
+      maxDurationMs: maxDuration,
+    );
+    if (marks == null) return;
+    // fromStart is the clicked time; fromEnd is the tail after it. Markers are
+    // absolute, so BOTH entries record fromStart — fromEnd is only shown, so
+    // the outro entry reads "this much will be skipped".
+    final (intro: fromStart, outro: fromEnd) = marks;
+    final clicked = Duration(seconds: fromStart);
+
+    final l10n = controller.localization;
+    final theme = controller.config.theme;
+    final tap = details.globalPosition;
+
+    final entry = OverlayEntry(
+      builder: (context) => LayoutBuilder(
+        builder: (context, constraints) {
+          const menuWidth = 220.0;
+          final left = (tap.dx - menuWidth / 2).clamp(
+            8.0,
+            (constraints.maxWidth - menuWidth - 8).clamp(8.0, double.infinity),
+          );
+          return Stack(
+            children: [
+              // Close on click outside, same as VDropdownMenu's barrier.
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _closeMarkerMenu,
+                  onSecondaryTap: _closeMarkerMenu,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+              Positioned(
+                left: left,
+                // Open upward: the bar sits at the bottom of the player.
+                bottom: constraints.maxHeight - tap.dy + 8,
+                width: menuWidth,
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: PlayerMenuPanel(
+                    theme: theme,
+                    children: [
+                      PlayerMenuItem(
+                        leading: const Icon(Icons.start),
+                        text: l10n.translate('set_as_opening'),
+                        trailing: Text(
+                          Util.formatDuration(clicked),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                        onTap: () {
+                          _closeMarkerMenu();
+                          // Marks this episode AND becomes the series-wide
+                          // default, so it persists and covers every episode.
+                          controller.setSkipPoint(introEnd: clicked);
+                        },
+                        theme: theme,
+                      ),
+                      PlayerMenuItem(
+                        leading: const Icon(Icons.last_page),
+                        text: l10n.translate('set_as_ending'),
+                        trailing: Text(
+                          Util.formatDuration(Duration(seconds: fromEnd)),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                        onTap: () {
+                          _closeMarkerMenu();
+                          controller.setSkipPoint(outroStart: clicked);
+                        },
+                        theme: theme,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    _markerMenu = entry;
+    Overlay.of(context).insert(entry);
+    // Keeps the auto-hide timer disarmed while the menu's barrier is up —
+    // hiding the controls underneath would strand an invisible tap-eater.
+    controller.showMoreMenu();
+  }
+
+  void _closeMarkerMenu() {
+    if (_markerMenu == null) return;
+    _markerMenu!.remove();
+    _markerMenu = null;
+    widget.controller?.hideMoreMenu();
+  }
 
   Widget _buildHoverTooltipWrapper(double maxDuration, double width) {
     return ValueListenableBuilder<bool>(
@@ -369,9 +496,18 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                       width - tooltipWidth,
                     );
 
+                // Clear the handle instead of sitting on it: the handle is
+                // centred at height/2 and grows 20% while hovered. Floored at
+                // the old flat 18 so the compact mobile layout is unchanged.
+                final double tooltipBottom =
+                    ((widget.barHeight + widget.padding * 2) / 2 +
+                            widget.handleRadius * 1.2 +
+                            8)
+                        .clamp(18.0, double.infinity);
+
                 return Positioned(
                   left: leftPos,
-                  bottom: 18,
+                  bottom: tooltipBottom,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -422,6 +558,28 @@ class _VideoProgressBarState extends State<VideoProgressBar>
       },
     );
   }
+}
+
+/// The two skip values a right-click at [localDx] means: `intro` is seconds
+/// from the start, `outro` seconds from the END (that's how SkipDelegate reads
+/// skipOutro), so they always sum to the media length. Null when the bar has no
+/// usable width. [localDx] is in the bar box's own space, [padding] the
+/// horizontal inset the track is drawn inside.
+({int intro, int outro})? markerSecondsAt({
+  required double localDx,
+  required double width,
+  required double padding,
+  required double maxDurationMs,
+}) {
+  final effectiveWidth = width - padding * 2;
+  if (effectiveWidth <= 0 || maxDurationMs <= 0) return null;
+
+  final relativeX = (localDx - padding).clamp(0.0, effectiveWidth);
+  final total = (maxDurationMs / 1000).round();
+  final intro = (relativeX / effectiveWidth * maxDurationMs / 1000)
+      .round()
+      .clamp(0, total);
+  return (intro: intro, outro: total - intro);
 }
 
 class ProgressBarPainter extends CustomPainter {
