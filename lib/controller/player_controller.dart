@@ -25,6 +25,7 @@ import '../utils/log.dart';
 import '../utils/util.dart';
 import 'delegates/resume_delegate.dart';
 import 'delegates/skip_delegate.dart';
+import 'playback_event_emitter.dart';
 import '../core/events/player_lifecycle_event.dart';
 import '../vidra_player_sdk.dart';
 
@@ -128,6 +129,16 @@ class PlayerController {
   bool _pendingResumeCheck = false;
   bool _isSwitchingEpisode = false;
   bool _isSwitchingQuality = false;
+
+  // Bumped by cancelSwitching(). A switch flight snapshots it at entry and
+  // goes stale when they diverge — see _switchEpisodeInternal.
+  int _switchGeneration = 0;
+
+  // Set by cancelSwitching, cleared when a load actually lands. After a
+  // cancel, media state points at an episode the player never opened — the
+  // "already on this episode" guard in switchEpisode must not swallow the
+  // user's next attempt to open it.
+  bool _cancelledLoad = false;
   bool _isSkippingOutro = false; // Currently executing a skip action
   bool _hasSkippedOutro = false; // Already skipped for this episode
   bool _hintedMarkerSetup = false; // The right-click hint fired once already
@@ -138,10 +149,9 @@ class PlayerController {
   StreamSubscription<ErrorState>? _errorSub;
   StreamSubscription<WindowEvent>? _windowSub;
 
-  // Event System
-  final _eventCtrl = StreamController<PlayerLifecycleEvent>.broadcast();
-  bool _hasEmittedPlaylistEnded = false;
-  bool _wasSeeking = false;
+  // Event System — transition->event derivation lives in the emitter; the
+  // side effects keyed on the same transitions stay in this class.
+  final _events = PlaybackEventEmitter();
 
   // Utilities
   final LeadingDebounce _mouseMoveDebounce = LeadingDebounce(
@@ -242,14 +252,8 @@ class PlayerController {
     // receive the creation event.
     scheduleMicrotask(() {
       if (_isDisposed) return;
-      _safeEmit(const PlayerCreated());
+      _events.emit(const PlayerCreated());
     });
-  }
-
-  void _safeEmit(PlayerLifecycleEvent event) {
-    if (!_eventCtrl.isClosed) {
-      _eventCtrl.add(event);
-    }
   }
 
   void _initialize({
@@ -316,7 +320,7 @@ class PlayerController {
       _playbackManager.switchingStream;
 
   /// Stream of structured lifecycle events.
-  Stream<PlayerLifecycleEvent> get lifecycleEvents => _eventCtrl.stream;
+  Stream<PlayerLifecycleEvent> get lifecycleEvents => _events.stream;
   ValueListenable<PlaybackPositionState> get positionListenable =>
       _playbackManager.positionNotifier;
 
@@ -445,7 +449,12 @@ class PlayerController {
   // ===============================================================
 
   Future<void> switchEpisode(int index) async {
-    if (_isDisposed || _mediaManager.state.currentEpisodeIndex == index) return;
+    if (_isDisposed) return;
+    // "Already on this episode" — unless a cancelled load left the player
+    // empty behind a media state that claims this episode is current.
+    if (_mediaManager.state.currentEpisodeIndex == index && !_cancelledLoad) {
+      return;
+    }
 
     // Prevent rapid re-entry and interleaving with a quality switch — both
     // drive resetPlayer/initialize/seek/play against the same player.
@@ -459,6 +468,10 @@ class PlayerController {
 
   Future<void> _switchEpisodeInternal(int index) async {
     _isSwitchingEpisode = true;
+    // Snapshot the cancel generation: cancelSwitching() bumps it, turning this
+    // flight stale. A stale flight must not play, must not re-end switching,
+    // and must not clear flags a NEWER switch may have set.
+    final generation = _switchGeneration;
 
     try {
       // Get target episode for display
@@ -468,11 +481,11 @@ class PlayerController {
           ? _mediaManager.state.episodes[index]
           : null;
 
-      _hasEmittedPlaylistEnded = false; // Reset for new episode
+      _events.rearmEpisodeEnd(); // Reset for new episode
 
       // Emit Change Event
       if (_mediaManager.state.currentEpisode != null && targetEpisode != null) {
-        _safeEmit(
+        _events.emit(
           EpisodeChanged(
             from: _mediaManager.state.currentEpisode,
             to: targetEpisode,
@@ -511,8 +524,10 @@ class PlayerController {
 
       _mediaManager.switchEpisode(index);
 
-      await _loadEpisode(index, switchEpisode: true);
+      await _loadEpisode(index, switchEpisode: true, generation: generation);
+      if (generation != _switchGeneration) return; // Cancelled mid-load.
       await play();
+      if (generation != _switchGeneration) return; // Cancelled mid-play.
 
       // End switching state
       _playbackManager.endSwitching();
@@ -521,12 +536,20 @@ class PlayerController {
       // The delay served no purpose and added latency to episode switches
     } catch (e) {
       logger.e('Error switching episode: $e');
-      // Ensure switching state is cleared on error
-      _playbackManager.endSwitching();
+      // Ensure switching state is cleared on error — but never a NEWER
+      // flight's: a cancelled flight unwinding late must not tear down the
+      // overlay of a switch the user started after the cancel.
+      if (generation == _switchGeneration) {
+        _playbackManager.endSwitching();
+      }
       rethrow;
     } finally {
-      // Always reset the switching flag
-      _isSwitchingEpisode = false;
+      // Reset the switching flag — unless this flight was cancelled, in which
+      // case cancelSwitching() already cleared it and a newer switch may own
+      // the flag by the time this stale flight unwinds.
+      if (generation == _switchGeneration) {
+        _isSwitchingEpisode = false;
+      }
     }
   }
 
@@ -550,6 +573,7 @@ class PlayerController {
     if (targetQuality == null) return;
 
     _isSwitchingQuality = true;
+    final generation = _switchGeneration; // See _switchEpisodeInternal.
     try {
       // Start switching state
       _playbackManager.startSwitching(targetQuality.label);
@@ -558,6 +582,10 @@ class PlayerController {
       final wasPlaying = lifecycle.status == PlaybackStatus.playing;
 
       await _playbackManager.resetPlayer();
+      // Cancel landing during resetPlayer: without this check the flight
+      // would call initialize with a FRESH token and open the target quality
+      // as if never cancelled.
+      if (generation != _switchGeneration) return;
 
       // Open the target quality's source directly (we already resolved it as
       // targetQuality above — no need to mutate media state first).
@@ -566,39 +594,105 @@ class PlayerController {
         _playbackManager.endSwitching();
         return;
       }
+      // A cancelled load lands in !ok too (its token died), so the stale
+      // check comes FIRST — and a stale flight must not call endSwitching:
+      // by the time it unwinds (a hung platform open ends at its own 60s
+      // timeout) a NEWER switch may own the overlay it would tear down.
+      if (generation != _switchGeneration) return;
       if (!ok) {
         // Open failed — keep the OLD quality index committed in media state so
         // the selector and currentSource stay truthful, and surface the error.
         _playbackManager.endSwitching();
         return;
       }
+      _cancelledLoad = false; // The player genuinely holds this source now.
 
-      _hasEmittedPlaylistEnded = false;
+      _events.rearmEpisodeEnd();
 
       // Restore audio/speed state after player reset
       await _audioManager.restoreState();
+      if (generation != _switchGeneration) return;
 
       // Commit the new quality only on success.
       _mediaManager.switchQuality(index);
 
       if (currentPosition > Duration.zero) {
         await seek(currentPosition, SeekSource.external);
+        if (generation != _switchGeneration) return;
       }
       if (wasPlaying || forcePlay) {
         await play();
+        if (generation != _switchGeneration) return;
       }
       // End switching state
       _playbackManager.endSwitching();
     } catch (e) {
-      // Ensure state is cleared on error
-      _playbackManager.endSwitching();
+      // Ensure state is cleared on error — never a newer flight's overlay.
+      if (generation == _switchGeneration) {
+        _playbackManager.endSwitching();
+      }
       rethrow;
     } finally {
-      _isSwitchingQuality = false;
+      if (generation == _switchGeneration) {
+        _isSwitchingQuality = false;
+      }
     }
   }
 
-  Future<void> _loadEpisode(int index, {bool switchEpisode = false}) async {
+  /// Abandon an in-flight episode or quality switch and give the UI back.
+  ///
+  /// The blocking overlay drops immediately. The abandoned flight is killed
+  /// two ways, because one is not enough: the dead lifecycle token makes an
+  /// initialize() that is ALREADY in flight return false, and the generation
+  /// checks after every await catch a cancel that lands anywhere else —
+  /// during resetPlayer, restoreState, the chapter probe, or the resume
+  /// check, where a fresh token would otherwise be minted and the flight
+  /// would complete as if never cancelled.
+  ///
+  /// The player is left where a FAILED load leaves it — nothing playing,
+  /// controls interactive, every episode/quality action available.
+  ///
+  /// No-op when nothing is switching.
+  void cancelSwitching() {
+    if (_isDisposed || !switching.isSwitching) return;
+
+    // Turn the in-flight switch stale BEFORE anything else: whatever it does
+    // from here on (play, endSwitching, flag clears) is guarded on this.
+    _switchGeneration++;
+
+    _playbackManager.cancelLoad();
+    _playbackManager.endSwitching();
+
+    // The stale flight skips its own flag clears (a newer switch may own the
+    // flags by the time it unwinds), so this owns them: switching flags so a
+    // new switch is allowed immediately, and the save-blocking resume flag
+    // the flight set at load start — periodic saves stay safe behind their
+    // own position > 0 guard.
+    _isSwitchingEpisode = false;
+    _isSwitchingQuality = false;
+    _pendingResumeCheck = false;
+    _cancelledLoad = true;
+
+    showControls();
+  }
+
+  /// Whether [generation] belongs to a switch flight that has been cancelled.
+  /// null means "not a cancellable flight" (the initial load).
+  bool _isStaleFlight(int? generation) =>
+      generation != null && generation != _switchGeneration;
+
+  /// [generation] is the cancel-generation snapshotted by the switch flight
+  /// that called this (null for the initial, uncancellable load). It is
+  /// re-checked after EVERY await: the lifecycle token only covers a cancel
+  /// that lands while initialize() is in flight — one landing during any
+  /// other await here would otherwise go unseen, and the flight would mint
+  /// fresh tokens and complete (EpisodeStarted, auto-play and all) for an
+  /// episode the user just refused.
+  Future<void> _loadEpisode(
+    int index, {
+    bool switchEpisode = false,
+    int? generation,
+  }) async {
     if (index < 0 || index >= _mediaManager.state.episodes.length) return;
 
     _hasSkippedOutro = false; // Reset skip state for new episode
@@ -613,6 +707,11 @@ class PlayerController {
 
     if (switchEpisode) {
       await _playbackManager.resetPlayer();
+      // A stale flight leaves _pendingResumeCheck alone everywhere below:
+      // cancelSwitching cleared it, and a NEWER flight may have re-set it —
+      // clearing here would disarm that flight's save protection (measured:
+      // the periodic save then overwrites the stored resume position).
+      if (_isDisposed || _isStaleFlight(generation)) return;
     }
 
     // Kick the chapter probe off in PARALLEL with opening the player: it's one
@@ -631,19 +730,22 @@ class PlayerController {
     if (!ok) {
       // Load failed — error already emitted. Don't drive audio/resume/play
       // against a player that never opened. Unblock saves: the resume check
-      // that would normally clear the flag never runs on this path.
-      _pendingResumeCheck = false;
+      // that would normally clear the flag never runs on this path. (Not on
+      // a stale flight — see the resetPlayer comment above.)
+      if (!_isStaleFlight(generation)) _pendingResumeCheck = false;
       return;
     }
+    if (_isStaleFlight(generation)) return; // Cancelled post-open.
+    _cancelledLoad = false; // The player genuinely holds this episode now.
     // Restore audio/speed state after player reset
     await _audioManager.restoreState();
-    if (_isDisposed) return;
+    if (_isDisposed || _isStaleFlight(generation)) return;
     showControls();
 
     // Emit EpisodeStarted
     final currentEp = _mediaManager.state.currentEpisode;
     if (currentEp != null) {
-      _safeEmit(EpisodeStarted(index: index, episode: currentEp));
+      _events.emit(EpisodeStarted(index: index, episode: currentEp));
     }
 
     // if (config.behavior.autoPlay) {
@@ -655,10 +757,10 @@ class PlayerController {
     //   }
     // }
     await chapterProbe;
-    if (_isDisposed) return;
+    if (_isDisposed || _isStaleFlight(generation)) return;
 
     // Check restore for new episode (flag was set at the top of this method)
-    _checkResumePlayback(index);
+    _checkResumePlayback(index, generation: generation);
   }
 
   /// Once per session, nudge the user that skip points can be set by
@@ -778,10 +880,20 @@ class PlayerController {
   // Feature Logic (Resume/Properties)
   // ===============================================================
 
-  void _checkResumePlayback(int episodeIndex) async {
+  void _checkResumePlayback(int episodeIndex, {int? generation}) async {
     if (_isDisposed) {
       _pendingResumeCheck = false;
       return;
+    }
+    // A stale flight neither plays nor touches the flag: cancelSwitching
+    // owns the clear, and a newer flight may have re-armed it since.
+    if (_isStaleFlight(generation)) return;
+
+    // Cancel can land during any await below; auto-playing the episode the
+    // user just refused is the one side effect that must not slip through.
+    Future<void> guardedPlay() async {
+      if (_isStaleFlight(generation)) return;
+      await play();
     }
 
     if (!config.features.enableHistory) {
@@ -789,7 +901,7 @@ class PlayerController {
       // If history is disabled but auto-play is on, we play immediately here
       // because _loadEpisode deferred it.
       if (config.behavior.autoPlay) {
-        await play();
+        await guardedPlay();
       }
       return;
     }
@@ -797,10 +909,10 @@ class PlayerController {
       await _resumeDelegate.checkAndPromptResume(
         episodeIndex: episodeIndex,
         isInitialized: lifecycle.isInitialized,
-        isDisposed: () => _isDisposed,
+        isDisposed: () => _isDisposed || _isStaleFlight(generation),
         seek: seek,
         pause: pause,
-        play: play,
+        play: guardedPlay,
         getPlayerSetting: () => effectiveSkipSetting,
         autoPlay: config.behavior.autoPlay,
         resumeMode: config.behavior.resumeMode,
@@ -809,11 +921,14 @@ class PlayerController {
       logger.e('[PlayerController] Resume check failed: $e');
       // If check fails, fallback to auto-play
       if (config.behavior.autoPlay) {
-        await play();
+        await guardedPlay();
       }
     } finally {
-      // Clear checking flag so we can start saving new progress
-      _pendingResumeCheck = false;
+      // Clear checking flag so we can start saving new progress — unless the
+      // flight went stale mid-check, in which case the flag is no longer ours.
+      if (!_isStaleFlight(generation)) {
+        _pendingResumeCheck = false;
+      }
     }
   }
 
@@ -1270,23 +1385,19 @@ class PlayerController {
         isInitialized: state.isInitialized,
       );
 
-      // Emit Events - Initialized
-      if (state.isInitialized && !previousState.isInitialized) {
-        _safeEmit(
-          MediaInitialized(
-            duration: position.duration,
-            aspectRatio: state.aspectRatio,
-          ),
-        );
-      }
+      // Event derivation (MediaInitialized / PlaybackStarted / PlaybackPaused)
+      // lives in the emitter; the side effects on the same transitions follow.
+      _events.onLifecycleTransition(
+        previous: previousState,
+        next: state,
+        mediaDuration: position.duration,
+      );
 
-      // Status Transitions
+      // Status Transitions — side effects only, events emitted above.
       if (state.status != previousState.status) {
         if (state.isPlaying) {
-          _safeEmit(const PlaybackStarted());
           _applyWakelock(true);
         } else if (state.status == PlaybackStatus.paused) {
-          _safeEmit(const PlaybackPaused());
           _applyWakelock(false);
 
           // Save history only on TRANSITION to paused. Switch guards: while
@@ -1307,7 +1418,8 @@ class PlayerController {
         } else if (state.status == PlaybackStatus.ended) {
           // Real end-of-media signal (adapter completedStream). The
           // position-threshold heuristic in _onPositionUpdate stays as a
-          // fallback; _hasEmittedPlaylistEnded guards against double-emission.
+          // fallback; the emitter's once-per-episode latch guards against
+          // double-emission.
           // Switch guards: a backend's stop() during episode/quality switching
           // must not read as a natural end.
           _applyWakelock(false);
@@ -1340,7 +1452,7 @@ class PlayerController {
     _errorSub = errorStream.listen((state) {
       if (_isDisposed) return;
       if (state.error != null) {
-        _safeEmit(MediaLoadFailed(state.error!));
+        _events.emit(MediaLoadFailed(state.error!));
       }
     });
   }
@@ -1349,15 +1461,9 @@ class PlayerController {
   Future<void> _onPositionUpdate(PlaybackPositionState state) async {
     if (_isDisposed) return;
 
-    // --- Seek Events ---
-    if (state.isSeeking && !_wasSeeking) {
-      _wasSeeking = true;
-      _safeEmit(PlaybackSeekStarted(from: _lastPosition.position));
-      _hasEmittedPlaylistEnded = false; // Reset on seek
-    } else if (!state.isSeeking && _wasSeeking) {
-      _wasSeeking = false;
-      _safeEmit(PlaybackSeekCompleted(to: state.position));
-    }
+    // --- Seek Events --- (edge detection + end-event re-arm in the emitter;
+    // must run BEFORE _lastPosition is overwritten, it is the "from" value)
+    _events.onPositionUpdate(previous: _lastPosition, next: state);
 
     _lastPosition = state;
 
@@ -1414,7 +1520,7 @@ class PlayerController {
 
     // --- Natural End Detection ---
     if (!_isSkippingOutro &&
-        !_hasEmittedPlaylistEnded &&
+        !_events.hasEmittedEpisodeEnd &&
         !state.isSeeking &&
         !state.isLive &&
         state.duration > Duration.zero &&
@@ -1426,7 +1532,7 @@ class PlayerController {
         endDuration: state.duration,
       );
       // Natural end with a next episode: auto-advance when enabled.
-      // (_hasEmittedPlaylistEnded, set above, makes this fire exactly once
+      // (The emitter's latch, set above, makes this fire exactly once
       // across the heuristic and ended-status paths.)
       if (didEmit && hasNextEpisode && autoPlayNext) {
         await playNextEpisode();
@@ -1479,32 +1585,30 @@ class PlayerController {
     int? episodeIndexOverride,
     bool? hasNextOverride,
   }) {
-    if (_hasEmittedPlaylistEnded) return false;
     final currentEp = episodeOverride ?? media.currentEpisode;
     if (currentEp == null) return false;
-    final episodeIndex = episodeIndexOverride ?? media.currentEpisodeIndex;
-    final hasNext = hasNextOverride ?? hasNextEpisode;
 
-    _safeEmit(EpisodeEnded(index: episodeIndex, episode: currentEp));
+    final result = _events.emitEpisodeEnd(
+      episode: currentEp,
+      episodeIndex: episodeIndexOverride ?? media.currentEpisodeIndex,
+      hasNext: hasNextOverride ?? hasNextEpisode,
+      markEndedWhenHasNext: markEndedWhenHasNext,
+      video: media.video,
+      episodes: media.episodes,
+    );
 
-    if (!hasNext) {
-      _safeEmit(PlaylistEnded(video: media.video, episodes: media.episodes));
-      _hasEmittedPlaylistEnded = true;
-
-      if (showReplayOnPlaylistEnd &&
-          endPosition != null &&
-          endDuration != null) {
-        _uiManager.showReplayDialog(
-          ResumeState(
-            positionMillis: endPosition.inMilliseconds,
-            durationMillis: endDuration.inMilliseconds,
-          ),
-        );
-      }
-    } else if (markEndedWhenHasNext) {
-      _hasEmittedPlaylistEnded = true;
+    if (result.playlistEnded &&
+        showReplayOnPlaylistEnd &&
+        endPosition != null &&
+        endDuration != null) {
+      _uiManager.showReplayDialog(
+        ResumeState(
+          positionMillis: endPosition.inMilliseconds,
+          durationMillis: endDuration.inMilliseconds,
+        ),
+      );
     }
-    return true;
+    return result.emitted;
   }
 
   /// Keep the screen awake while playing; release it otherwise.
@@ -1723,8 +1827,8 @@ class PlayerController {
     _playbackManager.dispose();
     _windowManager.dispose();
 
-    _safeEmit(const PlayerDisposed());
-    unawaited(_eventCtrl.close());
+    _events.emit(const PlayerDisposed());
+    unawaited(_events.close());
 
     await _player.dispose();
   }

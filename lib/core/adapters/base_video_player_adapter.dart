@@ -179,6 +179,15 @@ abstract class BaseVideoPlayerAdapter
     await onInitialize(source, token);
   }
 
+  /// Abandon any in-flight open: [openWithRetry]'s ladder, its back-off
+  /// sleeps, and the format/warmup pollers all die at their next token check.
+  /// The next [initialize] mints a fresh scope and is unaffected.
+  ///
+  /// This does NOT interrupt a platform `open()` call already in flight —
+  /// that one ends at its own [openWithRetry] timeout, silently, because its
+  /// token is dead by then.
+  void cancelLoad() => invalidateLifecycle();
+
   @override
   Future<void> reset() async {
     await _cancelAndClearSubscriptions();

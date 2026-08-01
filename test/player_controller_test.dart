@@ -9,6 +9,7 @@ import 'package:vidra_player/core/interfaces/media_repository.dart';
 import 'package:vidra_player/core/interfaces/video_player.dart';
 import 'package:vidra_player/core/model/model.dart';
 import 'package:vidra_player/core/state/states.dart';
+import 'package:vidra_player/ui/overlays/switching_overlay.dart';
 
 class FakeVideoPlayer implements IVideoPlayer {
   final _positionCtrl = StreamController<Duration>.broadcast();
@@ -167,6 +168,39 @@ class FakeVideoPlayer implements IVideoPlayer {
   void emitPosition(Duration position) {
     _position = position;
     _positionCtrl.add(position);
+  }
+}
+
+/// [FakeVideoPlayer] whose initialize()/reset() can be held open — the shape
+/// of a stalled network open or a wedged teardown, which is exactly what
+/// cancelSwitching exists for. Gates are captured per call, so two flights
+/// can hang on different completers.
+class HangingOpenPlayer extends FakeVideoPlayer {
+  /// When set, initialize() waits on it before completing.
+  Completer<void>? openGate;
+
+  /// When set, reset() waits on it before completing.
+  Completer<void>? resetGate;
+  int playCalls = 0;
+
+  @override
+  Future<void> initialize(VideoSource source) async {
+    final gate = openGate;
+    if (gate != null) await gate.future;
+    await super.initialize(source);
+  }
+
+  @override
+  Future<void> reset() async {
+    final gate = resetGate;
+    if (gate != null) await gate.future;
+    await super.reset();
+  }
+
+  @override
+  Future<void> play() async {
+    playCalls++;
+    await super.play();
   }
 }
 
@@ -701,5 +735,252 @@ void main() {
 
     await sub.cancel();
     await controller.dispose();
+  });
+
+  group('cancelSwitching', () {
+    test('drops the overlay at once and the stale flight never plays',
+        () async {
+      final player = HangingOpenPlayer();
+      final controller = _buildController(player: player);
+      // Let the initial (ungated) load finish.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final events = <PlayerLifecycleEvent>[];
+      final sub = controller.lifecycleEvents.listen(events.add);
+
+      // Gate the next open and start a switch that will hang on it.
+      final gate = Completer<void>();
+      player.openGate = gate;
+      final flight = controller.switchEpisode(1);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.switching.isSwitching, isTrue);
+
+      controller.cancelSwitching();
+      // Overlay must drop immediately — this is the whole point.
+      expect(controller.switching.isSwitching, isFalse);
+
+      // Release the hung open and let the abandoned flight unwind. It must
+      // not play, not re-raise switching, not claim the episode started.
+      gate.complete();
+      await flight;
+      await Future<void>.delayed(Duration.zero);
+      expect(player.playCalls, 0);
+      expect(controller.switching.isSwitching, isFalse);
+      expect(
+        events.whereType<EpisodeStarted>().where((e) => e.index == 1),
+        isEmpty,
+      );
+      // Cancellation is a user decision, not a failure.
+      expect(events.whereType<MediaLoadFailed>(), isEmpty);
+
+      await sub.cancel();
+      await controller.dispose();
+    });
+
+    test('the switch target can be re-opened after a cancel', () async {
+      final player = HangingOpenPlayer();
+      final controller = _buildController(player: player);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final gate = Completer<void>();
+      player.openGate = gate;
+      final flight = controller.switchEpisode(1);
+      await Future<void>.delayed(Duration.zero);
+      controller.cancelSwitching();
+      gate.complete();
+      await flight;
+
+      // Media state committed episode 1 but the player never opened it.
+      // Clicking episode 1 again must NOT be swallowed by the
+      // "already on this episode" guard. Count loads, don't inspect the
+      // last source: the ABANDONED flight also records one when its gated
+      // open finally resolves, so `last` passes even when the guard eats
+      // the re-click.
+      player.openGate = null;
+      final loadsBefore = player.initializedSources.length;
+      await controller.switchEpisode(1);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(controller.media.currentEpisodeIndex, 1);
+      expect(player.initializedSources.length, loadsBefore + 1);
+      expect(
+        player.initializedSources.last,
+        'https://example.com/video-2.mp4',
+      );
+      expect(controller.switching.isSwitching, isFalse);
+
+      await controller.dispose();
+    });
+
+    test('cancel while the player is still resetting kills the flight '
+        'before it can open', () async {
+      // The token mechanism alone misses this: the flight has not called
+      // initialize yet, so a later initialize would mint a FRESH token and
+      // the open would proceed as if never cancelled — EpisodeStarted,
+      // auto-play and all. The generation checks are what catch it.
+      final player = HangingOpenPlayer();
+      final controller = _buildController(player: player);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      final events = <PlayerLifecycleEvent>[];
+      final sub = controller.lifecycleEvents.listen(events.add);
+      final loadsBefore = player.initializedSources.length;
+
+      player.resetGate = Completer<void>();
+      final flight = controller.switchEpisode(1);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.switching.isSwitching, isTrue);
+
+      controller.cancelSwitching();
+      player.resetGate!.complete();
+      await flight;
+      await Future<void>.delayed(Duration.zero);
+
+      // The target episode was never even opened.
+      expect(player.initializedSources.length, loadsBefore);
+      expect(player.playCalls, 0);
+      expect(events.whereType<EpisodeStarted>(), isEmpty);
+
+      // And the target can still be opened afterwards.
+      player.resetGate = null;
+      await controller.switchEpisode(1);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(player.initializedSources.length, loadsBefore + 1);
+
+      await sub.cancel();
+      await controller.dispose();
+    });
+
+    test('a cancelled flight unwinding late never tears down a newer '
+        'switch\'s overlay', () async {
+      final player = HangingOpenPlayer();
+      final controller = _buildController(player: player);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // Quality switch hangs inside its open.
+      final gateA = Completer<void>();
+      player.openGate = gateA;
+      final flightA = controller.switchQuality(0);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.switching.isSwitching, isTrue);
+
+      controller.cancelSwitching();
+      expect(controller.switching.isSwitching, isFalse);
+
+      // User immediately starts an episode switch, which hangs on ITS open.
+      final gateB = Completer<void>();
+      player.openGate = gateB;
+      final flightB = controller.switchEpisode(1);
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.switching.isSwitching, isTrue);
+
+      // The stale quality flight finally unwinds. It must not endSwitch the
+      // NEW flight's input-blocking overlay out from under it.
+      gateA.complete();
+      await flightA;
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.switching.isSwitching, isTrue);
+
+      // The new flight completes normally.
+      gateB.complete();
+      await flightB;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(controller.switching.isSwitching, isFalse);
+      expect(controller.media.currentEpisodeIndex, 1);
+
+      await controller.dispose();
+    });
+
+    testWidgets('cancel reveal timer restarts for a back-to-back switch', (
+      tester,
+    ) async {
+      // Cancel + immediate re-switch reaches the overlay as ONE update where
+      // isSwitching never flips — only the attempt id moves. The reveal
+      // timer must restart on it, or the new overlay shows the cancel button
+      // from frame one (and a stale timer can fire into the new switch).
+      final player = HangingOpenPlayer();
+      final controller = _buildController(player: player);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+
+      Widget build(SwitchingState s) => MaterialApp(
+        home: SwitchingOverlay(
+          controller: controller,
+          state: s,
+          theme: controller.config.theme,
+        ),
+      );
+      TextButton button() => tester.widget<TextButton>(find.byType(TextButton));
+
+      await tester.pumpWidget(
+        build(const SwitchingState(isSwitching: true, attempt: 1)),
+      );
+      expect(button().onPressed, isNull); // hidden before the delay
+      await tester.pump(const Duration(milliseconds: 3100));
+      expect(button().onPressed, isNotNull); // revealed
+
+      // One rebuild, still switching, new attempt — the same-task case.
+      await tester.pumpWidget(
+        build(const SwitchingState(isSwitching: true, attempt: 2)),
+      );
+      expect(button().onPressed, isNull); // timer restarted
+      await tester.pump(const Duration(milliseconds: 3100));
+      expect(button().onPressed, isNotNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => controller.dispose());
+    });
+
+    testWidgets('overlay fits a short viewport instead of overflowing', (
+      tester,
+    ) async {
+      // Real-hardware regression: the cancel button pushed the fixed-height
+      // column past a small window ("BOTTOM OVERFLOWED BY 11 PIXELS" over the
+      // switching overlay). RenderFlex overflow throws in widget tests, so a
+      // clean pump at a tight size is the assertion.
+      final player = HangingOpenPlayer();
+      final controller = _buildController(player: player);
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+
+      // Short enough that the button-bearing column (~190px without a cover
+      // image) cannot fit unscaled — the case the fix exists for.
+      tester.view.physicalSize = const Size(500, 150);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SwitchingOverlay(
+            controller: controller,
+            state: const SwitchingState(isSwitching: true, attempt: 1),
+            theme: controller.config.theme,
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 3100));
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => controller.dispose());
+    });
+
+    test('is a no-op when nothing is switching', () async {
+      final player = HangingOpenPlayer();
+      final controller = _buildController(player: player);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      controller.cancelSwitching();
+      expect(controller.switching.isSwitching, isFalse);
+
+      // The guard still works: already-current episode stays a no-op.
+      final loads = player.initializedSources.length;
+      await controller.switchEpisode(0);
+      expect(player.initializedSources.length, loads);
+
+      await controller.dispose();
+    });
   });
 }

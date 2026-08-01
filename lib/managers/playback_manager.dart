@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/widgets.dart';
 
+import '../core/adapters/base_video_player_adapter.dart';
 import '../core/interfaces/video_player.dart';
 import '../core/lifecycle/lifecycle_token.dart';
 import '../core/lifecycle/safe_stream.dart';
@@ -205,6 +206,26 @@ class PlaybackManager with LifecycleTokenProvider {
     _config = config;
   }
 
+  /// Abandon the in-flight [initialize]: its captured token dies, so it
+  /// returns false without committing initialized state, and the caller takes
+  /// the normal failed-load path — no error is emitted, because nothing
+  /// failed; the user changed their mind.
+  ///
+  /// Advancing the generation only kills tokens captured BEFORE this call;
+  /// everything that reads [lifecycleToken] afterwards gets a live one, so
+  /// normal operation resumes untouched.
+  void cancelLoad() {
+    if (_isDisposed) return;
+    invalidateLifecycle();
+    // Also stop the adapter's retry ladder burning attempts against a load
+    // nobody wants. Adapters not built on the base class simply miss the
+    // early exit — their open ends at its own timeout.
+    final player = _player;
+    if (player is BaseVideoPlayerAdapter) {
+      player.cancelLoad();
+    }
+  }
+
   Future<void> resetPlayer() async {
     // Old media is gone — don't let isInitialized lie true through the reopen.
     _setInitialized(false, lifecycleToken);
@@ -284,6 +305,10 @@ class PlaybackManager with LifecycleTokenProvider {
     _switching = SwitchingState(
       isSwitching: true,
       targetQualityLabel: targetQualityLabel,
+      // New attempt id every time — the overlay resets its per-switch UI
+      // state on this, since back-to-back end+start can reach it as a single
+      // rebuild where isSwitching never visibly flips.
+      attempt: _switching.attempt + 1,
     );
     if (!_switchingCtrl.isClosed) {
       _switchingCtrl.add(_switching);
@@ -293,7 +318,10 @@ class PlaybackManager with LifecycleTokenProvider {
   void endSwitching() {
     if (_isDisposed) return;
 
-    _switching = const SwitchingState();
+    // Keep the attempt counter across the reset — zeroing it would let
+    // "switch A(1) -> end(0) -> switch B(1)" collide on the same id, which
+    // is exactly the case the counter exists to distinguish.
+    _switching = SwitchingState(attempt: _switching.attempt);
     if (!_switchingCtrl.isClosed) {
       _switchingCtrl.add(_switching);
     }

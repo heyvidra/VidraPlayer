@@ -1,3 +1,27 @@
+## 1.3.0
+
+### Added
+
+- **A stuck episode/quality switch can now be cancelled.** The blocking
+  switching overlay grows a cancel button once a switch outlives 3 seconds
+  (fast switches never flash it). Cancelling drops the overlay immediately,
+  silently abandons the in-flight load — no error, nothing failed, the user
+  changed their mind — and leaves every episode/quality action available,
+  including re-opening the very episode that was cancelled. Also available
+  programmatically as `PlayerController.cancelSwitching`.
+- `BaseVideoPlayerAdapter.cancelLoad` / `PlaybackManager.cancelLoad`, the
+  underlying abandon-the-open primitives.
+- `SwitchingState.attempt`, a monotonic id of the current switch. UI keyed on
+  `isSwitching` edges alone cannot see "cancel, then immediately switch
+  again" — the two updates coalesce into one where the flag never flips.
+
+### Changed
+
+- The transition→event derivation rules (seek edges, the once-per-episode
+  end-event latch, lifecycle status events) moved out of `PlayerController`
+  into `PlaybackEventEmitter`, where they are unit-tested in isolation. No
+  behavioral change; `lifecycleEvents` and every event payload are unchanged.
+
 ## 1.2.0
 
 ### Breaking
