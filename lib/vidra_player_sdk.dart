@@ -1,8 +1,12 @@
+import 'core/interfaces/frame_sweeper.dart';
 import 'core/interfaces/video_player.dart';
 import 'utils/log.dart';
 
 /// Factory function alias for resolving a video player adapter.
 typedef VidraPlayerFactory = IVideoPlayer Function();
+
+/// Factory function alias for resolving a background [FrameSweeper].
+typedef FrameSweeperFactory = FrameSweeper Function();
 
 /// Top-level SDK configuration and Dependency Injection (IoC) container.
 ///
@@ -37,6 +41,7 @@ abstract final class VidraPlayer {
 
   static VidraPlayerFactory? _factory;
   static String? _adapterLabel;
+  static FrameSweeperFactory? _sweeperFactory;
 
   /// Whether a player factory has been registered.
   static bool get isInitialized => _factory != null;
@@ -54,6 +59,22 @@ abstract final class VidraPlayer {
     _adapterLabel = adapterLabel;
     loggerNoStack.i('[VidraPlayer] Registered adapter: $adapterLabel');
   }
+
+  /// Register (or clear, with null) a factory for background [FrameSweeper]s.
+  ///
+  /// Optional capability: with a sweeper registered, [PlayerController]
+  /// pre-generates sprite thumbnails for the episode being watched and the
+  /// progress-bar hover preview works on every platform. Without one,
+  /// behavior is exactly as before (macOS native previews only).
+  static void setFrameSweeperFactory(FrameSweeperFactory? factory) {
+    _sweeperFactory = factory;
+  }
+
+  /// Whether a [FrameSweeper] factory has been registered.
+  static bool get hasFrameSweeper => _sweeperFactory != null;
+
+  /// Create a [FrameSweeper], or null when no factory is registered.
+  static FrameSweeper? createFrameSweeper() => _sweeperFactory?.call();
 
   /// Create a new [IVideoPlayer] instance using the registered factory.
   ///

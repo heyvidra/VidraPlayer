@@ -1,7 +1,9 @@
 import 'package:fvp/fvp.dart' as fvp;
 import 'package:vidra_player/vidra_player.dart';
+import 'src/frame_sweeper.dart';
 import 'src/video_player.dart';
 
+export 'src/frame_sweeper.dart';
 export 'src/video_player.dart';
 
 /// VidraPlayer FVP Plugin
@@ -20,5 +22,9 @@ abstract final class VidraPlayerKit {
       () => VideoPlayerAdapter(),
       adapterLabel: 'fvp',
     );
+    // Optional capability: with this registered, PlayerController generates
+    // sprite thumbnails in the background and progress-bar hover previews
+    // work on every platform, not just macOS.
+    VidraPlayer.setFrameSweeperFactory(MdkFrameSweeper.new);
   }
 }

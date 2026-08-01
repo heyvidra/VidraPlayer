@@ -2,6 +2,19 @@
 
 ### Added
 
+- **Progress-bar hover previews on every platform**, not just macOS. With a
+  `FrameSweeper` registered (the fvp adapter package registers one in
+  `ensureInitialized`), the controller sweeps the episode being watched in
+  the background — lowest quality variant, no seeking, sequential decode at
+  boosted rate — and hover serves the pre-generated sprite tiles. macOS keeps
+  its native seek-accurate previews and uses sprites as the fallback. Sweeps
+  start only after 10s of stable playback, resume from where they left off
+  after a network stall, stop retrying after three failures, and are cancelled
+  the moment the user switches episodes.
+- `FrameSweeper` / `SweepRequest` / `SweptFrame` — optional adapter capability
+  (same non-breaking pattern as `EpisodeMarkerStore`), registered via
+  `VidraPlayer.setFrameSweeperFactory`.
+
 - **A stuck episode/quality switch can now be cancelled.** The blocking
   switching overlay grows a cancel button once a switch outlives 3 seconds
   (fast switches never flash it). Cancelling drops the overlay immediately,

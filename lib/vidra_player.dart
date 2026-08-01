@@ -47,7 +47,10 @@ library;
 // ============================================
 
 // SDK Initialization
-export 'vidra_player_sdk.dart' show VidraPlayer, VidraPlayerFactory;
+export 'vidra_player_sdk.dart'
+    show VidraPlayer, VidraPlayerFactory, FrameSweeperFactory;
+export 'core/interfaces/frame_sweeper.dart'
+    show FrameSweeper, SweepRequest, SweptFrame;
 
 // Core Controller
 export 'controller/player_controller.dart' show PlayerController;

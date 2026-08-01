@@ -11,6 +11,12 @@ class ThumbnailManager {
   final String url;
   final int maxCacheSize;
 
+  /// Optional sprite-cache lookup, filled by the background sweep. This is
+  /// what makes hover previews work off macOS at all; on macOS it is the
+  /// fallback when the native generator has nothing (HLS sources it can't
+  /// open, frames it fails on).
+  final Uint8List? Function(double seconds)? spriteLookup;
+
   // LRU Cache: position (seconds) -> thumbnail data
   final LinkedHashMap<int, Uint8List> _cache = LinkedHashMap<int, Uint8List>();
 
@@ -29,7 +35,11 @@ class ThumbnailManager {
   bool _isDisposed = false;
   String? _preparedUrl;
 
-  ThumbnailManager({required this.url, this.maxCacheSize = 50});
+  ThumbnailManager({
+    required this.url,
+    this.maxCacheSize = 50,
+    this.spriteLookup,
+  });
 
   Future<void> prepare() async {
     if (!Platform.isMacOS) return;
@@ -43,8 +53,11 @@ class ThumbnailManager {
   }
 
   Future<Uint8List?> getThumbnail(double seconds) async {
-    if (!Platform.isMacOS) return null;
     if (_isDisposed) return null;
+    // Off macOS there is no native generator: the sprite cache is the only
+    // source. On macOS the native path stays primary (seek-accurate, larger)
+    // and the sprite serves as its fallback further down.
+    if (!Platform.isMacOS) return spriteLookup?.call(seconds);
 
     final int key = seconds.round();
 
@@ -66,13 +79,17 @@ class ThumbnailManager {
       _fetchReady = false;
       final data = await _fetchNative(seconds, key);
       _startFetchWindow();
-      return data;
+      // Native came up empty (AVAssetImageGenerator fails on some HLS) —
+      // a sprite tile beats an empty preview.
+      return data ?? spriteLookup?.call(seconds);
     }
 
     // Inside the window: this call supersedes any earlier pending one. Complete
     // the superseded request now (with the nearest cached frame) so its awaiter
     // never hangs, then become the new trailing request.
-    _pendingCompleter?.complete(_nearestCached(key));
+    _pendingCompleter?.complete(
+      _nearestCached(key) ?? spriteLookup?.call(seconds),
+    );
     final completer = Completer<Uint8List?>();
     _pendingSeconds = seconds;
     _pendingCompleter = completer;
@@ -104,7 +121,9 @@ class ThumbnailManager {
       if (seconds != null && completer != null) {
         // Trailing edge: fetch the last requested position and reopen a window.
         final data = await _fetchNative(seconds, seconds.round());
-        if (!completer.isCompleted) completer.complete(data);
+        if (!completer.isCompleted) {
+          completer.complete(data ?? spriteLookup?.call(seconds));
+        }
         if (!_isDisposed) _startFetchWindow();
       } else {
         _fetchReady = true;

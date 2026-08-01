@@ -1,0 +1,137 @@
+import 'dart:async';
+
+import 'package:fvp/mdk.dart' as mdk;
+import 'package:vidra_player/core/interfaces/frame_sweeper.dart';
+
+/// [FrameSweeper] on a raw mdk [mdk.Player]: sequential decode at boosted
+/// rate, NO seeking. Every configuration choice below is a measured result
+/// (2026-08-01 gate probes, recorded in vidraDlp's thumbnail task doc):
+///
+/// - Single-variant URL required: an ABR master paces the pipeline below
+///   realtime (0.4x); the same content's lowest variant sweeps at 14x.
+/// - Audio track disabled + `setBufferRange(min: 60s)`: 9.2x -> 14.2x.
+/// - A parked player renders nothing — playback must be running before any
+///   grab, and `renderVideo()` must be pumped because nothing composites
+///   this texture.
+/// - `dispose()` straight after a snapshot crashed the probe app; teardown
+///   here pauses, settles, then disposes.
+class MdkFrameSweeper implements FrameSweeper {
+  @override
+  Stream<SweptFrame> sweep(SweepRequest request) {
+    late StreamController<SweptFrame> ctrl;
+    var cancelled = false;
+    final cancelSignal = Completer<void>();
+    ctrl = StreamController<SweptFrame>(
+      onListen: () => _run(ctrl, request, () => cancelled, cancelSignal),
+      onCancel: () {
+        cancelled = true;
+        if (!cancelSignal.isCompleted) cancelSignal.complete();
+      },
+    );
+    return ctrl.stream;
+  }
+
+  Future<void> _run(
+    StreamController<SweptFrame> ctrl,
+    SweepRequest req,
+    bool Function() isCancelled,
+    Completer<void> cancelSignal,
+  ) async {
+    final p = mdk.Player();
+    try {
+      p.media = req.url;
+      p.mute = true;
+      p.activeAudioTracks = [];
+      p.setBufferRange(min: 60000, max: 120000);
+
+      final startMs = req.startAt?.inMilliseconds ?? 0;
+      // Raced against cancellation: prepare can pend up to 30s on a strained
+      // CDN — exactly when users switch away — and a cancel that merely
+      // flips a bool would leave this player prefetching hard against the
+      // NEW episode's startup for the whole wait. The abandoned prepare
+      // still resolves against the disposed player later; teardown's
+      // pause-and-settle runs first either way.
+      final prep = await Future.any([
+        p
+            .prepare(position: startMs)
+            .timeout(const Duration(seconds: 30), onTimeout: () => -99),
+        cancelSignal.future.then((_) => -100),
+      ]);
+      if (prep == -100 || isCancelled()) return;
+      if (prep < 0) {
+        throw StateError('sweep open failed ($prep) for ${req.url}');
+      }
+
+      // Both dimensions, or updateTexture returns -1 and nothing renders.
+      final tex = await p.updateTexture(width: req.width, height: req.height);
+      if (tex < 0) throw StateError('sweep texture failed for ${req.url}');
+
+      p.playbackRate = 16.0;
+      p.state = mdk.PlaybackState.playing;
+
+      final durationMs = p.mediaInfo.duration;
+      final endMs =
+          req.endAt?.inMilliseconds ??
+          (durationMs > 0 ? durationMs - 2000 : 1 << 40);
+      final intervalMs = req.interval.inMilliseconds;
+
+      var lastEmitMs = startMs - intervalMs;
+      var lastPos = -1;
+      var stalledSince = Stopwatch()..start();
+
+      while (!isCancelled()) {
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        if (isCancelled()) return;
+
+        p.renderVideo();
+        final pos = p.position;
+
+        // Stall watchdog: a sweep that stops advancing (dead CDN, wedged
+        // demuxer) must end as an error, not run silently forever. 90s, not
+        // 30s — measured on a production CDN, a mid-sweep network dip can
+        // pause the pipeline well past 30s and then recover; this is
+        // background work, patience costs nothing, and the resume-from-last-
+        // tile retry upstream covers the genuinely dead case.
+        if (pos != lastPos) {
+          lastPos = pos;
+          stalledSince = Stopwatch()..start();
+        } else if (stalledSince.elapsed > const Duration(seconds: 90)) {
+          throw TimeoutException('sweep stalled at ${pos}ms');
+        }
+
+        if (pos - lastEmitMs >= intervalMs) {
+          final pixels = await p
+              .snapshot(width: req.width, height: req.height)
+              .timeout(const Duration(seconds: 5), onTimeout: () => null);
+          if (isCancelled()) return;
+          if (pixels != null && pixels.isNotEmpty) {
+            lastEmitMs = pos;
+            ctrl.add(
+              SweptFrame(
+                position: Duration(milliseconds: pos),
+                width: req.width,
+                height: req.height,
+                pixels: pixels,
+              ),
+            );
+          }
+        }
+
+        if (pos >= endMs) break;
+      }
+    } catch (e, st) {
+      if (!ctrl.isClosed) ctrl.addError(e, st);
+    } finally {
+      // Measured crash: dispose() immediately after a snapshot cycle takes
+      // the native side down. Park it, let the vo settle, then dispose.
+      try {
+        p.state = mdk.PlaybackState.paused;
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        p.dispose();
+      } catch (_) {
+        // A leaked player beats a crashed process.
+      }
+      if (!ctrl.isClosed) await ctrl.close();
+    }
+  }
+}

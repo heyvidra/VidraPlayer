@@ -13,6 +13,7 @@ import '../core/model/player_locale.dart';
 import '../managers/playback_manager.dart';
 import '../managers/audio_manager.dart';
 import '../managers/media_manager.dart';
+import '../managers/sprite_sweep_service.dart';
 import '../managers/thumbnail_manager.dart';
 import '../managers/ui_manager.dart';
 import '../managers/window_event_manager.dart';
@@ -148,6 +149,7 @@ class PlayerController {
   StreamSubscription<PlaybackPositionState>? _positionSub;
   StreamSubscription<ErrorState>? _errorSub;
   StreamSubscription<WindowEvent>? _windowSub;
+  StreamSubscription<BufferingState>? _sweepBufferingSub;
 
   // Event System — transition->event derivation lives in the emitter; the
   // side effects keyed on the same transitions stay in this class.
@@ -468,6 +470,10 @@ class PlayerController {
 
   Future<void> _switchEpisodeInternal(int index) async {
     _isSwitchingEpisode = true;
+    // Stop sweeping the episode being left: its tiles keep, but the new
+    // episode's startup gets the whole pipe. The stable-playback trigger
+    // re-arms for the new episode on its own.
+    _spriteSweepService?.cancelSweep();
     // Snapshot the cancel generation: cancelSwitching() bumps it, turning this
     // flight stale. A stale flight must not play, must not re-end switching,
     // and must not clear flags a NEWER switch may have set.
@@ -574,6 +580,9 @@ class PlayerController {
 
     _isSwitchingQuality = true;
     final generation = _switchGeneration; // See _switchEpisodeInternal.
+    // Same reasoning as the episode switch: the quality switch's open needs
+    // the pipe more than the background sweep does. Resume re-arms after.
+    _spriteSweepService?.cancelSweep();
     try {
       // Start switching state
       _playbackManager.startSwitching(targetQuality.label);
@@ -841,6 +850,9 @@ class PlayerController {
   void updateEpisodes(List<VideoEpisode> episodes) {
     if (_isDisposed) return;
     _mediaManager.updateEpisodes(episodes);
+    // Sprite tiles are keyed by episode INDEX; a replaced/reordered catalog
+    // would silently serve the wrong episode's frames. Drop and re-sweep.
+    _spriteSweepService?.clear();
     // The overlay (episode list panel) is driven by visibilityStream; force a
     // repaint so a panel that is already open picks up the new catalog.
     _uiManager.refresh();
@@ -1455,6 +1467,17 @@ class PlayerController {
         _events.emit(MediaLoadFailed(state.error!));
       }
     });
+
+    // The 10s-of-playback gate only guards sweep START; a network dip
+    // mid-sweep needs the sweep to yield too — the foreground video always
+    // wins the pipe. Cancel is cheap: the next stable stretch re-triggers
+    // and the sweep RESUMES from its last tile, not from zero.
+    _sweepBufferingSub = bufferingStream.listen((state) {
+      if (_isDisposed || !state.isBuffering) return;
+      // Cooldown, or a flapping connection restarts the sweep on every
+      // buffering exit and each restart costs a resolve+open cycle.
+      _spriteSweepService?.cancelSweep(cooldown: const Duration(seconds: 30));
+    });
   }
 
   /// Extracted frame-dependent logic: Runs ONLY when explicitly allowed
@@ -1564,6 +1587,44 @@ class PlayerController {
         ),
       );
     }
+
+    _maybeStartSpriteSweep(state);
+  }
+
+  /// Kick off the background sprite sweep once THIS episode's playback has
+  /// proven stable. Cheap bool checks on the position tick; every condition
+  /// after the covers() check runs at most once per episode.
+  ///
+  /// The 10s-of-playback threshold is the bandwidth guard: the sweep shares
+  /// the pipe with the video the user is watching, so it must not pile onto
+  /// a startup that is still fighting to buffer.
+  void _maybeStartSpriteSweep(PlaybackPositionState state) {
+    if (!config.behavior.enableThumbnail) return;
+    if (state.isLive || state.position < const Duration(seconds: 10)) return;
+    if (buffering.isBuffering || _isSwitchingEpisode || _isSwitchingQuality) {
+      return;
+    }
+
+    final service = _spriteService();
+    if (service == null) return;
+    final episodeIndex = media.currentEpisodeIndex;
+    if (service.covers(episodeIndex) || service.isSweeping) return;
+
+    final quality = SpriteSweepService.pickSweepQuality(
+      media.currentEpisode?.qualities ?? const [],
+    );
+    if (quality == null) return;
+    service.startSweep(episodeIndex: episodeIndex, url: quality.source.path);
+  }
+
+  /// Lazily create the sprite service — only when an adapter package has
+  /// registered a [FrameSweeper] factory. Null otherwise, and every sprite
+  /// path degrades to the pre-sprite behavior.
+  SpriteSweepService? _spriteService() {
+    if (_isDisposed || !VidraPlayer.hasFrameSweeper) return null;
+    return _spriteSweepService ??= SpriteSweepService(
+      createSweeper: () => VidraPlayer.createFrameSweeper()!,
+    );
   }
 
   /// Emit [EpisodeEnded] and, when this is the final episode, [PlaylistEnded].
@@ -1711,7 +1772,13 @@ class PlayerController {
   /// force `enableThumbnail` off elsewhere. Centralized here so no write path
   /// (constructor / [setEnableThumbnail] / [updateConfig]) can forget it.
   static PlayerConfig _normalizeConfig(PlayerConfig c) {
-    if (!Platform.isMacOS && c.behavior.enableThumbnail) {
+    // enableThumbnail used to be forced off away from macOS because the
+    // native generator was the only preview source. With a FrameSweeper
+    // registered, sprite previews work everywhere — forcing the flag off
+    // would kill the sweep on exactly the platforms it exists for.
+    if (!Platform.isMacOS &&
+        !VidraPlayer.hasFrameSweeper &&
+        c.behavior.enableThumbnail) {
       return c.copyWith(behavior: c.behavior.copyWith(enableThumbnail: false));
     }
     return c;
@@ -1757,6 +1824,7 @@ class PlayerController {
   // recreated (and their cache dropped) on every preview mount.
   ThumbnailManager? _thumbnailManager;
   String? _thumbnailUrl;
+  SpriteSweepService? _spriteSweepService;
 
   /// Get (or lazily create) the shared [ThumbnailManager] for [url].
   /// Switching to a different URL disposes the previous manager.
@@ -1769,7 +1837,14 @@ class PlayerController {
     }
     if (_thumbnailManager == null || _thumbnailUrl != url) {
       _thumbnailManager?.dispose();
-      _thumbnailManager = ThumbnailManager(url: url);
+      _thumbnailManager = ThumbnailManager(
+        url: url,
+        // Bound to the CURRENT episode at lookup time, not creation time —
+        // hover only ever previews the playing episode, and the manager is
+        // recreated on every url change anyway.
+        spriteLookup: (seconds) =>
+            _spriteSweepService?.lookup(media.currentEpisodeIndex, seconds),
+      );
       _thumbnailUrl = url;
     }
     return _thumbnailManager!;
@@ -1814,11 +1889,14 @@ class PlayerController {
     unawaited(_positionSub?.cancel());
     unawaited(_errorSub?.cancel());
     unawaited(_windowSub?.cancel());
+    unawaited(_sweepBufferingSub?.cancel());
 
     // Internal
     _mouseMoveDebounce.dispose();
     _thumbnailManager?.dispose();
     _thumbnailManager = null;
+    _spriteSweepService?.dispose();
+    _spriteSweepService = null;
 
     // Managers
     _uiManager.dispose();
