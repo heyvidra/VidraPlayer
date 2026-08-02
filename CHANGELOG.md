@@ -13,7 +13,12 @@
   the moment the user switches episodes.
 - `FrameSweeper` / `SweepRequest` / `SweptFrame` — optional adapter capability
   (same non-breaking pattern as `EpisodeMarkerStore`), registered via
-  `VidraPlayer.setFrameSweeperFactory`.
+  `VidraPlayer.setFrameSweeperFactory`. **Both adapter packages implement it**,
+  so hover thumbnails behave the same whichever engine a host picks; the two
+  packages share a name and swapping one for the other needs no host code
+  change. `SweptFrame` comes in `.rawRgba()` and `.encoded()` flavours because
+  mdk hands back raw pixels and mpv hands back PNG — normalising would cost a
+  decode plus an encode per tile for nothing.
 - Hovering the progress bar now fills the track from the start to the cursor,
   so the stretch a click would seek to is visible before clicking.
 
@@ -29,6 +34,9 @@
   accumulated range would claim data that HLS would still re-fetch.
 - Buffered colour raised to ~40% opacity across every theme preset; several
   sat within a few percent of the track colour and were invisible regardless.
+- The media_kit adapter's read-ahead is now 60s too (`cache-secs` /
+  `demuxer-readahead-secs`), so the buffered segment means the same thing on
+  both engines.
 - The hover preview collapses when it has no frame yet instead of showing a
   broken-image placeholder, and the time bubble is positioned independently
   of it — a shared frame sized for the 160px preview froze the bubble 80px

@@ -1,23 +1,41 @@
 import 'dart:typed_data';
 
 /// One frame delivered by a [FrameSweeper].
+///
+/// Engines differ in what they hand back — mdk's `snapshot()` gives raw RGBA,
+/// mpv's `screenshot()` gives encoded PNG/JPEG — so both shapes are first
+/// class here. Re-encoding an already-encoded frame just to normalise would
+/// cost a decode plus an encode per tile for no gain.
 class SweptFrame {
   /// Content position the frame belongs to.
   final Duration position;
+
+  /// Raw RGBA (`width * height * 4` bytes) when [isEncoded] is false;
+  /// PNG/JPEG file bytes when it is true.
+  final Uint8List bytes;
+
+  /// Whether [bytes] is already an encoded image.
+  final bool isEncoded;
+
+  /// Pixel dimensions. Meaningful only for raw frames — an encoded frame
+  /// carries its own, so both are 0.
   final int width;
   final int height;
 
-  /// Raw pixels, `width * height * 4` bytes. The pixel order is whatever the
-  /// engine's snapshot path produces — consumers encode it once and never
-  /// look at channels individually, so the SDK does not re-order.
-  final Uint8List pixels;
-
-  const SweptFrame({
+  /// A frame the SDK must encode before display.
+  const SweptFrame.rawRgba({
     required this.position,
     required this.width,
     required this.height,
-    required this.pixels,
-  });
+    required Uint8List pixels,
+  }) : bytes = pixels,
+       isEncoded = false;
+
+  /// A frame the engine already encoded (PNG or JPEG) — stored as-is.
+  const SweptFrame.encoded({required this.position, required this.bytes})
+    : isEncoded = true,
+      width = 0,
+      height = 0;
 }
 
 /// Parameters for one sweep run.

@@ -131,8 +131,12 @@ class MediaKitPlayerAdapter extends BaseVideoPlayerAdapter {
     await _trySet(np, 'reconnect-on-error', 'yes');
     await _trySet(np, 'reconnect-on-http-error', '4xx,5xx');
     await _trySet(np, 'cache', 'yes');
-    await _trySet(np, 'cache-secs', '30');
-    await _trySet(np, 'demuxer-readahead-secs', '20');
+    // 60s to match what the fvp adapter asks mdk for, so the progress bar's
+    // buffered segment means the same thing on both engines (and a network
+    // dip is survivable for the same length of time). Measured on mdk: the
+    // buffer fills within ~3s of playback and start-up latency is unchanged.
+    await _trySet(np, 'cache-secs', '60');
+    await _trySet(np, 'demuxer-readahead-secs', '60');
 
     if (isM3u8(source.path)) {
       // ── HLS / m3u8 specific configuration ─────────────────────────────────

@@ -69,11 +69,15 @@ class MdkFrameSweeper implements FrameSweeper {
       p.playbackRate = 16.0;
       p.state = mdk.PlaybackState.playing;
 
-      final durationMs = p.mediaInfo.duration;
-      final endMs =
-          req.endAt?.inMilliseconds ??
-          (durationMs > 0 ? durationMs - 2000 : 1 << 40);
       final intervalMs = req.interval.inMilliseconds;
+      // Resolved lazily below when the engine does not know it yet. mdk
+      // reports duration right after prepare for the sources measured here,
+      // but the media_kit sweeper hit exactly this with HLS: an early read
+      // returned 0, the end bound went infinite, and a sweep that had
+      // covered the whole episode was then failed by the stall watchdog at
+      // EOF. Same shape, same guard.
+      int endMs = req.endAt?.inMilliseconds ?? p.mediaInfo.duration;
+      if (endMs > 0) endMs -= 2000;
 
       var lastEmitMs = startMs - intervalMs;
       var lastPos = -1;
@@ -85,6 +89,11 @@ class MdkFrameSweeper implements FrameSweeper {
 
         p.renderVideo();
         final pos = p.position;
+
+        if (endMs <= 0) {
+          final d = p.mediaInfo.duration;
+          if (d > 0) endMs = d - 2000;
+        }
 
         // Stall watchdog: a sweep that stops advancing (dead CDN, wedged
         // demuxer) must end as an error, not run silently forever. 90s, not
@@ -107,7 +116,7 @@ class MdkFrameSweeper implements FrameSweeper {
           if (pixels != null && pixels.isNotEmpty) {
             lastEmitMs = pos;
             ctrl.add(
-              SweptFrame(
+              SweptFrame.rawRgba(
                 position: Duration(milliseconds: pos),
                 width: req.width,
                 height: req.height,
@@ -117,7 +126,7 @@ class MdkFrameSweeper implements FrameSweeper {
           }
         }
 
-        if (pos >= endMs) break;
+        if (endMs > 0 && pos >= endMs) break;
       }
     } catch (e, st) {
       if (!ctrl.isClosed) ctrl.addError(e, st);

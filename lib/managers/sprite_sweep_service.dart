@@ -143,8 +143,13 @@ class SpriteSweepService {
           )
           .listen(
             (frame) {
-              // Encode off the frame's raw pixels immediately; the sweeper may
-              // reuse buffers between emissions.
+              // Engines that already encode (mpv) store straight through;
+              // raw-pixel engines (mdk) encode immediately, because the
+              // sweeper may reuse its buffer between emissions.
+              if (frame.isEncoded) {
+                store[frame.position.inSeconds] = frame.bytes;
+                return;
+              }
               _encodePng(frame).then((png) {
                 if (_isDisposed || png == null) return;
                 store[frame.position.inSeconds] = png;
@@ -293,7 +298,7 @@ class SpriteSweepService {
     try {
       final completer = Completer<ui.Image>();
       ui.decodeImageFromPixels(
-        frame.pixels,
+        frame.bytes,
         frame.width,
         frame.height,
         // mdk's Dart wrapper documents rgba and its native header says bgra;

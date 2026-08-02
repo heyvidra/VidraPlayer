@@ -20,19 +20,33 @@ class FakeSweeper implements FrameSweeper {
     return _ctrl.stream;
   }
 
+  /// Raw-RGBA frame, the mdk/fvp shape: the service must encode it.
   void emitFrame(int second) {
     // 2x2 opaque red RGBA — tiny but real pixels for the PNG encoder.
     final px = Uint8List.fromList(
       List.filled(4 * 4, 0)
-        ..setAll(0, [255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255]),
+        ..setAll(0, [
+          255, 0, 0, 255, //
+          255, 0, 0, 255,
+          255, 0, 0, 255,
+          255, 0, 0, 255,
+        ]),
     );
     _ctrl.add(
-      SweptFrame(
+      SweptFrame.rawRgba(
         position: Duration(seconds: second),
         width: 2,
         height: 2,
         pixels: px,
       ),
+    );
+  }
+
+  /// Pre-encoded frame, the mpv/media_kit shape: the service must store it
+  /// as-is rather than running it back through the encoder.
+  void emitEncodedFrame(int second, Uint8List bytes) {
+    _ctrl.add(
+      SweptFrame.encoded(position: Duration(seconds: second), bytes: bytes),
     );
   }
 
@@ -228,6 +242,22 @@ void main() {
         reason: 'retry budget is 3 — an un-sweepable source must not burn '
             'bandwidth forever against the video being watched',
       );
+      service.dispose();
+    });
+
+    test('an engine that pre-encodes stores its bytes verbatim', () async {
+      // media_kit's screenshot() already returns PNG; re-encoding it would
+      // cost a decode + encode per tile and change the bytes.
+      final sweeper = FakeSweeper();
+      final service = SpriteSweepService(createSweeper: () => sweeper);
+      service.startSweep(episodeIndex: 0, url: 'u');
+      await _settle();
+
+      final png = Uint8List.fromList([137, 80, 78, 71, 1, 2, 3]);
+      sweeper.emitEncodedFrame(10, png);
+      await _settle();
+
+      expect(service.lookup(0, 10), same(png));
       service.dispose();
     });
 
