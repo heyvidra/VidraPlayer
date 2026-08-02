@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:fvp/fvp.dart';
 import 'package:video_player/video_player.dart';
 
 import 'package:vidra_player/core/adapters/base_video_player_adapter.dart';
@@ -113,8 +114,32 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
     final size = _controller!.value.size;
     emitVideoSize(VideoSize(size.width.toInt(), size.height.toInt()));
 
+    _raiseBufferCeiling();
+
     // Attach regular heartbeat updates
     _controller!.addListener(_onTick);
+  }
+
+  /// Widen mdk's packet buffer so playback survives a network dip and the
+  /// progress bar's buffered segment means something.
+  ///
+  /// mdk defaults to a ~4s ceiling. Measured on device: 4s of a 44-minute
+  /// episode is under 2px of progress bar — the segment was being painted
+  /// correctly and was simply invisible, hidden under the playhead. With the
+  /// ceiling at 60s the buffer fills within ~3s of playback and the segment
+  /// becomes a real ~27px indicator. The floor stays at mdk's default 4s so
+  /// the open threshold — and with it start-up latency, which this player has
+  /// tuned repeatedly — is unchanged (measured 878ms vs 2242ms on a colder
+  /// CDN: no evidence of a regression).
+  ///
+  /// Applied through fvp's own `FVPControllerExtensions` — a supported,
+  /// exported API. (Two hackier routes were tried first and thrown away: the
+  /// unexported `MdkVideoPlayerPlatform` in fvp's `src/`, and
+  /// `VideoPlayerController.playerId`, which is `@visibleForTesting`.)
+  void _raiseBufferCeiling() {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    ctrl.setBufferRange(min: 4000, max: 60000);
   }
 
 

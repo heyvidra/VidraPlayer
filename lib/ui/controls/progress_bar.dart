@@ -285,6 +285,8 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                             buffered: _lastState.buffered,
                             toggleAnimation: _toggleAnimation,
                             hoverAnimation: _hoverAnimation,
+                            hoverX: _hoverX,
+                            horizontalPadding: widget.padding,
                             playedColor: widget.playedColor ?? Colors.red,
                             bufferedColor:
                                 widget.bufferedColor ?? Colors.white38,
@@ -535,13 +537,21 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                 final bool showThumbnail =
                     widget.controller != null &&
                     widget.controller!.enableThumbnail;
-                final double tooltipWidth = showThumbnail ? 160.0 : 50.0;
 
-                final double leftPos =
-                    (widget.padding + innerDisplayX - (tooltipWidth / 2)).clamp(
-                      0.0,
-                      width - tooltipWidth,
-                    );
+                // Preview and bubble are positioned INDEPENDENTLY, each
+                // clamped by its own width. One shared frame clamped for the
+                // 160px preview froze the bubble 80px short of either edge —
+                // felt broken whenever the preview was collapsed (position
+                // not swept yet). Near an edge the preview parks while the
+                // bubble keeps tracking the cursor, same as every mainstream
+                // player.
+                const double previewWidth = 160.0;
+                const double bubbleFrameWidth = 70.0;
+                final double hoverCenter = widget.padding + innerDisplayX;
+                final double previewLeft = (hoverCenter - previewWidth / 2)
+                    .clamp(0.0, width - previewWidth);
+                final double bubbleLeft = (hoverCenter - bubbleFrameWidth / 2)
+                    .clamp(0.0, width - bubbleFrameWidth);
 
                 // Clear the handle instead of sitting on it: the handle is
                 // centred at height/2 and grows 20% while hovered. Floored at
@@ -551,16 +561,18 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                             widget.handleRadius * 1.2 +
                             8)
                         .clamp(18.0, double.infinity);
+                // Bubble pill: ~16px text line + 8px vertical padding, plus
+                // the 5px gap the preview keeps above it.
+                const double bubbleHeight = 24.0;
 
-                return Positioned(
-                  left: leftPos,
-                  bottom: tooltipBottom,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
+                return Positioned.fill(
+                  child: Stack(
+                    clipBehavior: Clip.none,
                     children: [
                       if (showThumbnail)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 5),
+                        Positioned(
+                          left: previewLeft,
+                          bottom: tooltipBottom + bubbleHeight + 5,
                           child: ThumbnailPreview(
                             controller: widget.controller!,
                             url: widget
@@ -578,20 +590,32 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                             seconds: (displayTime / 1000).floorToDouble(),
                           ),
                         ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.black87,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          Util.formatDuration(duration),
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
+                      Positioned(
+                        left: bubbleLeft,
+                        bottom: tooltipBottom,
+                        // Fixed frame, intrinsic pill centred inside: the
+                        // clamp needs a known width, the pill keeps its size.
+                        child: SizedBox(
+                          width: bubbleFrameWidth,
+                          height: bubbleHeight,
+                          child: Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.black87,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                Util.formatDuration(duration),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -635,6 +659,12 @@ class ProgressBarPainter extends CustomPainter {
   final List<BufferRange> buffered;
   final Animation<double> toggleAnimation;
   final Animation<double> hoverAnimation;
+
+  /// Cursor x in the BAR BOX's space (includes [horizontalPadding]); null when
+  /// the mouse is elsewhere. Drives the YouTube-style fill from the track
+  /// start to the cursor — a paint-only signal, same as [position].
+  final ValueNotifier<double?> hoverX;
+  final double horizontalPadding;
   final Color playedColor;
   final Color bufferedColor;
   final Color backgroundColor;
@@ -654,6 +684,8 @@ class ProgressBarPainter extends CustomPainter {
     required this.buffered,
     required this.toggleAnimation,
     required this.hoverAnimation,
+    required this.hoverX,
+    required this.horizontalPadding,
     required this.playedColor,
     required this.bufferedColor,
     required this.backgroundColor,
@@ -663,7 +695,12 @@ class ProgressBarPainter extends CustomPainter {
     this.introEndMs,
     this.outroStartMs,
   }) : super(
-         repaint: Listenable.merge([position, toggleAnimation, hoverAnimation]),
+         repaint: Listenable.merge([
+           position,
+           toggleAnimation,
+           hoverAnimation,
+           hoverX,
+         ]),
        );
 
   @override
@@ -719,7 +756,32 @@ class ProgressBarPainter extends CustomPainter {
       }
     }
 
-    // 3. Draw Played Progress
+    // 3. Hover scrub fill: track start -> cursor, faded in/out by the hover
+    // animation (so a stale hoverX after the mouse leaves paints nothing).
+    // Drawn UNDER the played fill: behind the playhead it vanishes into the
+    // red, ahead of it it lights the stretch the cursor would seek to.
+    final double? hx = hoverX.value;
+    if (hx != null && hoverValue > 0) {
+      final fillPx = (hx - horizontalPadding).clamp(0.0, size.width);
+      if (fillPx > 0) {
+        final Paint hoverFill = Paint()
+          ..color = Colors.white.withValues(alpha: 0.30 * hoverValue);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(
+              0,
+              centerY - currentHeight / 2,
+              fillPx,
+              currentHeight,
+            ),
+            Radius.circular(currentHeight / 2),
+          ),
+          hoverFill,
+        );
+      }
+    }
+
+    // 4. Draw Played Progress
     final playedWidth =
         (position.value / duration).clamp(0.0, 1.0) * size.width;
     final Paint playedPaint = Paint()..color = playedColor;
@@ -736,7 +798,7 @@ class ProgressBarPainter extends CustomPainter {
       playedPaint,
     );
 
-    // 4. Draw skip bands. On TOP of the played fill, or a watched intro would
+    // 5. Draw skip bands. On TOP of the played fill, or a watched intro would
     // hide the band that proves the setting took. Kept low-alpha and inset so
     // it annotates the track rather than competing with progress.
     if (introEndMs != null || outroStartMs != null) {
@@ -764,7 +826,7 @@ class ProgressBarPainter extends CustomPainter {
       if (outroStartMs != null) band(outroStartMs!, duration);
     }
 
-    // 5. Draw Handle
+    // 6. Draw Handle
     if (toggleValue > 0) {
       final Paint handlePaint = Paint()
         ..color = handleColor.withValues(alpha: toggleValue);

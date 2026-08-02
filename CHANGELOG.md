@@ -14,6 +14,26 @@
 - `FrameSweeper` / `SweepRequest` / `SweptFrame` — optional adapter capability
   (same non-breaking pattern as `EpisodeMarkerStore`), registered via
   `VidraPlayer.setFrameSweeperFactory`.
+- Hovering the progress bar now fills the track from the start to the cursor,
+  so the stretch a click would seek to is visible before clicking.
+
+### Changed
+
+- **The buffered segment is finally visible.** It was always painted, but the
+  fvp adapter left mdk's packet buffer at its ~4s default — under 2px on a
+  44-minute episode, and hidden under the playhead. The adapter now raises
+  the ceiling to 60s (floor untouched at 4s, so start-up latency is
+  unchanged: measured 878ms vs 2242ms against a colder CDN). The bar reads
+  as runway ahead of the playhead, which is what mdk reports — it resets on
+  seek because the engine keeps no download history, and painting an
+  accumulated range would claim data that HLS would still re-fetch.
+- Buffered colour raised to ~40% opacity across every theme preset; several
+  sat within a few percent of the track colour and were invisible regardless.
+- The hover preview collapses when it has no frame yet instead of showing a
+  broken-image placeholder, and the time bubble is positioned independently
+  of it — a shared frame sized for the 160px preview froze the bubble 80px
+  short of either edge, and left it off-centre whenever the preview was
+  absent.
 
 - **A stuck episode/quality switch can now be cancelled.** The blocking
   switching overlay grows a cancel button once a switch outlives 3 seconds

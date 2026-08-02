@@ -26,7 +26,6 @@ class ThumbnailPreview extends StatefulWidget {
 class _ThumbnailPreviewState extends State<ThumbnailPreview> {
   ThumbnailManager? _manager;
   Uint8List? _thumbnailData;
-  bool _isLoading = false;
 
   @override
   void initState() {
@@ -63,28 +62,23 @@ class _ThumbnailPreviewState extends State<ThumbnailPreview> {
   Future<void> _loadThumbnail() async {
     if (_manager == null) return;
 
-    // Only show the spinner when we have nothing to display yet — while
-    // scrubbing, keep the previous frame visible instead of flashing.
-    if (_thumbnailData == null && !_isLoading) {
-      setState(() {
-        _isLoading = true;
-      });
-    }
-
     final data = await _manager!.getThumbnail(widget.seconds);
 
-    if (mounted) {
-      setState(() {
-        if (data != null) {
-          _thumbnailData = data;
-        }
-        _isLoading = false;
-      });
+    if (mounted && data != null) {
+      // While scrubbing, a miss keeps the previous frame visible instead of
+      // flashing — sprite coverage is sparse until the sweep catches up.
+      setState(() => _thumbnailData = data);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Nothing to show yet (position not swept, native generator empty):
+    // collapse entirely. A broken-image placeholder box over every hover
+    // reads as "previews are broken", not "previews are coming" — the time
+    // bubble below carries the hover on its own until a frame exists.
+    if (_thumbnailData == null) return const SizedBox.shrink();
+
     return Container(
       width: widget.width,
       height: widget.height,
@@ -102,32 +96,7 @@ class _ThumbnailPreviewState extends State<ThumbnailPreview> {
       clipBehavior: Clip.antiAlias,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(4),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            if (_thumbnailData != null)
-              Image.memory(_thumbnailData!, fit: BoxFit.cover)
-            else if (_isLoading)
-              const Center(
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white70),
-                  ),
-                ),
-              )
-            else
-              const Center(
-                child: Icon(
-                  Icons.image_not_supported,
-                  color: Colors.white24,
-                  size: 24,
-                ),
-              ),
-          ],
-        ),
+        child: Image.memory(_thumbnailData!, fit: BoxFit.cover),
       ),
     );
   }
