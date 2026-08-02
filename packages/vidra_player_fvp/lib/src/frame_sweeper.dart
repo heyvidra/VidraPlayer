@@ -66,10 +66,17 @@ class MdkFrameSweeper implements FrameSweeper {
       final tex = await p.updateTexture(width: req.width, height: req.height);
       if (tex < 0) throw StateError('sweep texture failed for ${req.url}');
 
-      p.playbackRate = 16.0;
+      const rate = 16.0;
+      p.playbackRate = rate;
       p.state = mdk.PlaybackState.playing;
 
-      final intervalMs = req.interval.inMilliseconds;
+      // Poll granularity is multiplied by the playback rate: at 16x a 200ms
+      // sleep advances 3.2s of content, which turned a requested 10s interval
+      // into an irregular 10-14s and — measured — left two episodes sampled
+      // on different grids, killing cross-episode frame matching. Poll at a
+      // fraction of the FINEST interval expressed in wall time.
+      final finestMs = (req.fineInterval ?? req.interval).inMilliseconds;
+      final pollMs = ((finestMs / rate) / 4).clamp(30, 200).toInt();
       // Resolved lazily below when the engine does not know it yet. mdk
       // reports duration right after prepare for the sources measured here,
       // but the media_kit sweeper hit exactly this with HLS: an early read
@@ -79,12 +86,13 @@ class MdkFrameSweeper implements FrameSweeper {
       int endMs = req.endAt?.inMilliseconds ?? p.mediaInfo.duration;
       if (endMs > 0) endMs -= 2000;
 
-      var lastEmitMs = startMs - intervalMs;
+      // Far enough back that the first poll emits immediately.
+      var lastEmitMs = startMs - (1 << 20);
       var lastPos = -1;
       var stalledSince = Stopwatch()..start();
 
       while (!isCancelled()) {
-        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await Future<void>.delayed(Duration(milliseconds: pollMs));
         if (isCancelled()) return;
 
         p.renderVideo();
@@ -108,7 +116,8 @@ class MdkFrameSweeper implements FrameSweeper {
           throw TimeoutException('sweep stalled at ${pos}ms');
         }
 
-        if (pos - lastEmitMs >= intervalMs) {
+        if (pos - lastEmitMs >= req.intervalAt(pos, endMs > 0 ? endMs : 0)
+                .inMilliseconds) {
           final pixels = await p
               .snapshot(width: req.width, height: req.height)
               .timeout(const Duration(seconds: 5), onTimeout: () => null);

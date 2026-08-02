@@ -83,11 +83,18 @@ class MediaKitFrameSweeper implements FrameSweeper {
 
       // Audio off after open: the track list does not exist before it.
       await player.setAudioTrack(AudioTrack.no());
-      await player.setRate(16.0);
+      const rate = 16.0;
+      await player.setRate(rate);
       await player.play();
 
+      // Poll granularity is multiplied by the playback rate: at 16x a 200ms
+      // sleep advances 3.2s of content, so a requested 10s interval landed at
+      // an irregular 10-14s and two episodes ended up sampled on different
+      // grids — measured, and fatal to cross-episode frame matching.
+      final finestMs = (req.fineInterval ?? req.interval).inMilliseconds;
+      final pollMs = ((finestMs / rate) / 4).clamp(30, 200).toInt();
+
       final startMs = req.startAt?.inMilliseconds ?? 0;
-      final intervalMs = req.interval.inMilliseconds;
       // Duration is resolved INSIDE the loop, not here: for HLS mpv does not
       // know it yet at this point (the main adapter has a whole two-phase
       // stability dance for the same reason). Reading it early yielded 0,
@@ -96,12 +103,13 @@ class MediaKitFrameSweeper implements FrameSweeper {
       // failed it, discarding a completed sweep as an error.
       int endMs = req.endAt?.inMilliseconds ?? 0;
 
-      var lastEmitMs = startMs - intervalMs;
+      // Far enough back that the first poll emits immediately.
+      var lastEmitMs = startMs - (1 << 20);
       var lastPos = -1;
       var stalledSince = Stopwatch()..start();
 
       while (!isCancelled()) {
-        await Future<void>.delayed(const Duration(milliseconds: 200));
+        await Future<void>.delayed(Duration(milliseconds: pollMs));
         if (isCancelled()) return;
 
         final pos = player.state.position.inMilliseconds;
@@ -124,7 +132,8 @@ class MediaKitFrameSweeper implements FrameSweeper {
           throw TimeoutException('sweep stalled at ${pos}ms');
         }
 
-        if (pos - lastEmitMs >= intervalMs) {
+        if (pos - lastEmitMs >=
+            req.intervalAt(pos, endMs > 0 ? endMs : 0).inMilliseconds) {
           final png = await player
               .screenshot(format: 'image/png')
               .timeout(const Duration(seconds: 5), onTimeout: () => null);

@@ -119,7 +119,7 @@ export 'core/interfaces/video_player.dart' show IVideoPlayer;
 export 'core/adapters/base_video_player_adapter.dart'
     show BaseVideoPlayerAdapter, OpenResult;
 export 'core/interfaces/media_repository.dart'
-    show MediaRepository, EpisodeMarkerStore;
+    show MediaRepository, EpisodeMarkerStore, EpisodeHashStore;
 export 'core/interfaces/window_delegate.dart' show WindowDelegate;
 export 'adapters/window/standard_window_delegate.dart'
     show StandardWindowDelegate;

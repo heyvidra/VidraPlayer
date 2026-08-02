@@ -46,7 +46,26 @@ class SweepRequest {
   final String url;
 
   /// Content-time spacing between delivered frames.
+  ///
+  /// Implementations must poll fast enough to honour this: at a boosted
+  /// playback rate, wall-clock polling granularity multiplies. Measured on
+  /// device before this was stated — a 200ms poll at 16x made a requested
+  /// 10s interval land at an irregular 10-14s, and the two episodes being
+  /// compared ended up sampled on different grids, which made cross-episode
+  /// frame matching impossible in principle.
   final Duration interval;
+
+  /// Tighter spacing to use inside [fineRegion] windows at each end of the
+  /// media. Null means [interval] everywhere.
+  ///
+  /// Detection compares frames ACROSS episodes, so it needs both sides
+  /// sampled densely enough that some pair lands on the same moment of a
+  /// shared intro. A 10s grid cannot: two episodes whose intros start 3s
+  /// apart never sample the same instant.
+  final Duration? fineInterval;
+
+  /// How much of the start and the end gets [fineInterval] spacing.
+  final Duration fineRegion;
 
   /// Frame size. Thumbnails, not stills — keep it small.
   final int width;
@@ -63,11 +82,24 @@ class SweepRequest {
   const SweepRequest({
     required this.url,
     this.interval = const Duration(seconds: 10),
+    this.fineInterval,
+    this.fineRegion = const Duration(minutes: 4),
     this.width = 160,
     this.height = 90,
     this.startAt,
     this.endAt,
   });
+
+  /// Spacing that applies at content position [positionMs], given the media
+  /// length ([durationMs], 0 when not yet known).
+  Duration intervalAt(int positionMs, int durationMs) {
+    final fine = fineInterval;
+    if (fine == null) return interval;
+    final region = fineRegion.inMilliseconds;
+    if (positionMs <= region) return fine;
+    if (durationMs > 0 && positionMs >= durationMs - region) return fine;
+    return interval;
+  }
 }
 
 /// Optional capability: decode a stream in the background and deliver frames

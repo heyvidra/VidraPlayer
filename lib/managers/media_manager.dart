@@ -330,6 +330,46 @@ class MediaManager with LifecycleTokenProvider {
     safeEmit(_mediaCtrl, _state, token);
   }
 
+  /// The repository's hash store, when it opted into one. Same optional-cast
+  /// shape as [_markerStore].
+  EpisodeHashStore? get _hashStore {
+    final repository = _repository;
+    return repository is EpisodeHashStore
+        ? repository as EpisodeHashStore
+        : null;
+  }
+
+  /// Stored sweep hashes for the current video, keyed by episode index.
+  /// Empty when no store is configured or nothing was stored yet.
+  Future<Map<int, List<int>>> loadEpisodeHashes() async {
+    final token = lifecycleToken;
+    final store = _hashStore;
+    if (!token.isAlive || _state.video == null || store == null) {
+      return const {};
+    }
+    try {
+      final hashes = await store.getEpisodeHashes(videoId: _state.video!.id);
+      return token.isAlive ? hashes : const {};
+    } catch (e) {
+      logger.w('[MediaManager] Failed to load episode hashes: $e');
+      return const {};
+    }
+  }
+
+  /// Persist one episode's sweep hashes. Silently does nothing without a store
+  /// — detection then works within the session only, as it did before.
+  Future<void> saveEpisodeHashes(int episodeIndex, List<int> hashes) async {
+    final store = _hashStore;
+    if (!lifecycleToken.isAlive || _state.video == null || store == null) {
+      return;
+    }
+    try {
+      await store.saveEpisodeHashes(_state.video!.id, episodeIndex, hashes);
+    } catch (e) {
+      logger.w('[MediaManager] Failed to persist episode hashes: $e');
+    }
+  }
+
   /// Store markers for one episode. A lower-ranked source (a chapter probe, a
   /// detector) never clobbers what the user placed by hand — see
   /// [EpisodeMarkers.outranks].

@@ -74,6 +74,11 @@ class _VideoProgressBarState extends State<VideoProgressBar>
   StreamSubscription<MediaContextState>? _mediaSub;
   EpisodeMarkers? _markers;
 
+  /// Series-wide skip seconds, mirrored so the media-stream guard can tell a
+  /// real change from a repeat. skipOutro is a tail length, not a position.
+  int _skipIntro = 0;
+  int _skipOutro = 0;
+
   // Snapshot of the last seen position state. Structural fields (duration,
   // buffered, isLive) trigger setState when they change; the position itself
   // never does — it flows into [_currentPosition] paint-only.
@@ -113,10 +118,26 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     final controller = widget.controller;
     if (controller != null) {
       _markers = controller.currentMarkers;
+      _skipIntro = controller.playerSetting.skipIntro;
+      _skipOutro = controller.playerSetting.skipOutro;
       _mediaSub = controller.mediaStream.listen((state) {
         final next = state.episodeMarkers[state.currentEpisodeIndex];
-        if (next == _markers) return;
-        if (mounted) setState(() => _markers = next);
+        // The series-wide seconds are watched too, not just the markers:
+        // detection writes them mid-playback, and an equality guard that only
+        // looked at markers left the bar painting a boundary the player had
+        // already started skipping at.
+        final intro = state.playerSetting?.skipIntro ?? 0;
+        final outro = state.playerSetting?.skipOutro ?? 0;
+        if (next == _markers && intro == _skipIntro && outro == _skipOutro) {
+          return;
+        }
+        if (mounted) {
+          setState(() {
+            _markers = next;
+            _skipIntro = intro;
+            _skipOutro = outro;
+          });
+        }
       });
     }
   }
@@ -294,12 +315,8 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                             handleColor: widget.handleColor ?? Colors.red,
                             barHeight: widget.barHeight,
                             handleRadius: widget.handleRadius,
-                            introEndMs: _drawnMarkers?.introEnd?.inMilliseconds
-                                .toDouble(),
-                            outroStartMs: _drawnMarkers
-                                ?.outroStart
-                                ?.inMilliseconds
-                                .toDouble(),
+                            introEndMs: _introEndMs(),
+                            outroStartMs: _outroStartMs(maxDuration),
                           ),
                         ),
                       ),
@@ -364,6 +381,32 @@ class _VideoProgressBarState extends State<VideoProgressBar>
   EpisodeMarkers? get _drawnMarkers {
     final m = _markers;
     return (m == null || m.clear) ? null : m;
+  }
+
+  /// Where the intro band ends, in ms — this episode's marker when it has one,
+  /// otherwise the SERIES-wide skip setting.
+  ///
+  /// The fallback matters because those two layers are one feature seen from
+  /// different distances, and the skip logic already merges them exactly this
+  /// way (`PlayerController.effectiveSkipSetting`). Without it, an episode
+  /// nobody swept skips 90 seconds on playback while its progress bar shows
+  /// nothing at all — the player acting on a boundary it refuses to draw.
+  double? _introEndMs() {
+    final marked = _drawnMarkers?.introEnd?.inMilliseconds;
+    if (marked != null) return marked.toDouble();
+    return _skipIntro > 0 ? _skipIntro * 1000.0 : null;
+  }
+
+  /// Where the outro band starts, in ms. Same fallback, but skipOutro is a
+  /// TAIL LENGTH (seconds from the end, see SkipDelegate) while the painter
+  /// wants an absolute position — hence the subtraction, and the duration
+  /// guard, since the bar paints before the media reports one.
+  double? _outroStartMs(double duration) {
+    final marked = _drawnMarkers?.outroStart?.inMilliseconds;
+    if (marked != null) return marked.toDouble();
+    if (_skipOutro <= 0 || duration <= 0) return null;
+    final start = duration - _skipOutro * 1000.0;
+    return start > 0 ? start : null;
   }
 
   /// Right-click menu: mark the clicked time as the intro end or the outro

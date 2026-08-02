@@ -1,3 +1,66 @@
+## 1.4.0
+
+### Added
+
+- **Cross-episode intro/outro detection.** The background sweep now also
+  perceptual-hashes each frame (dHash, 64-bit), and two episodes of one series
+  are compared for a shared run. A match writes `MarkerSource.detected`
+  markers for both episodes AND the series-wide `skipIntro`, so episodes that
+  were never swept skip too — the manual right-click path has always written
+  both layers, and the detector was only writing one.
+
+  Every threshold is a measured value, not a guess. The defaults were set from
+  real production footage and then corrected twice by it: the first guesses
+  (`maxOffset` 40s, `minRun` 20s, threshold 10, no gap tolerance) each hid a
+  genuine 17-second title sequence sitting at a 96-SECOND offset, because one
+  episode opened with a recap. `test/shared_run_real_data_test.dart` pins this
+  with real hashes and asserts that each first guess would have missed it.
+
+  `minRun` was then lowered again, from 14s to 10s: the SAME shared sequence
+  of the SAME two episodes measures 17s on one sweep and 11s on the next,
+  purely from where the sampler lands. A floor tuned to one measurement is a
+  coin flip. The match COUNT is the discriminator; the duration is a loose
+  sanity check. A second real-data fixture pins both samplings.
+
+- **Optional `EpisodeHashStore`.** Hashes (~4KB per episode) persist so a later
+  session can detect against an episode it never swept; without it the feature
+  only ever fires when a viewer leaves the player open across two episodes.
+  Same opt-in shape as `EpisodeMarkerStore` — hosts that skip it are unchanged.
+  Preview TILES are deliberately not persisted: ~2MB per episode to avoid a
+  sweep that costs nothing and regenerates within minutes of playback.
+
+### Changed
+
+- Sweep hashes are reported as soon as the head window is covered (~15s at 16x)
+  rather than at end of sweep (~5min). Measured on device: ordinary episode
+  browsing cancelled three sweeps in a row, so nothing was ever persisted and
+  no marker ever appeared — despite enough having been gathered within seconds
+  each time. `onSweepComplete` is now `onHashesReady` and fires twice.
+- A marker that arrives mid-playback is applied immediately when the playhead
+  is still inside the intro. The intro skip was decided once at episode start,
+  long before detection finishes, so the episode the intro was found on played
+  it in full with the marker sitting unused.
+- The progress bar draws the series-wide skip setting when an episode has no
+  marker of its own, matching how `effectiveSkipSetting` already merges the two
+  layers. Previously the player skipped 90 seconds on an unswept episode while
+  the bar drew nothing — acting on a boundary it refused to show.
+
+### Fixed
+
+- Tail detection no longer runs on a half-swept episode. `detectOutro` measures
+  backwards from the last tile, so mid-sweep it treats wherever the sweep
+  stopped as the credits: measured, it produced `outro=23s` on a 44-minute
+  episode and persisted it, which auto-skip would have acted on. Completeness
+  is tracked per episode and carried in the stored blob, so a restored partial
+  set stays partial.
+- `SpriteSweepService.clear()` dropped tiles but not hashes, despite both being
+  keyed by episode index — a reordered catalog would have marked episode 3 from
+  whatever used to be at index 3.
+- `cancelSweep` was silent, making "the sweep died" indistinguishable in the
+  log from "the sweep is still running".
+- A null intro or outro now reports why (closest distance, longest run) instead
+  of being reported as a bare `null`.
+
 ## 1.3.0
 
 ### Added

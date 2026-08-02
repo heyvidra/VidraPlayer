@@ -13,6 +13,7 @@ import '../core/model/player_locale.dart';
 import '../managers/playback_manager.dart';
 import '../managers/audio_manager.dart';
 import '../managers/media_manager.dart';
+import '../managers/shared_run_detector.dart';
 import '../managers/sprite_sweep_service.dart';
 import '../managers/thumbnail_manager.dart';
 import '../managers/ui_manager.dart';
@@ -1606,15 +1607,45 @@ class PlayerController {
     }
 
     final service = _spriteService();
-    if (service == null) return;
-    final episodeIndex = media.currentEpisodeIndex;
-    if (service.covers(episodeIndex) || service.isSweeping) return;
+    if (service == null || service.isSweeping) return;
+
+    // The episode being watched first; once it is covered, its neighbour —
+    // detection needs a second episode to compare against, and the tile cache
+    // dies with the controller, so waiting for the user to watch two in a row
+    // means the feature would essentially never fire.
+    //
+    // Driven from the position tick rather than one-shot off sweep
+    // completion: startSweep can decline (buffering cooldown, a sweep already
+    // in flight), and a one-shot attempt that lands during a cooldown gives
+    // up forever. Here the next tick just tries again.
+    final target = _nextSweepTarget(service);
+    if (target == null) return;
 
     final quality = SpriteSweepService.pickSweepQuality(
-      media.currentEpisode?.qualities ?? const [],
+      media.episodes[target].qualities,
     );
     if (quality == null) return;
-    service.startSweep(episodeIndex: episodeIndex, url: quality.source.path);
+    service.startSweep(episodeIndex: target, url: quality.source.path);
+  }
+
+  /// The episode a sweep should cover next, or null when everything worth
+  /// sweeping is covered.
+  int? _nextSweepTarget(SpriteSweepService service) {
+    final episodes = media.episodes;
+    if (episodes.isEmpty) return null;
+    final current = media.currentEpisodeIndex;
+    if (!service.covers(current)) return current;
+    // The neighbour sweep exists ONLY to give detection a partner. Once this
+    // episode has markers — found here, or from a stored hash set, or placed
+    // by hand — it has nothing left to buy, and a second five-minute 16x sweep
+    // is bandwidth taken from the stream the user is watching.
+    if (media.episodeMarkers.containsKey(current)) return null;
+    // One neighbour is enough: detection needs a pair, not a season.
+    for (final index in [current + 1, current - 1]) {
+      if (index < 0 || index >= episodes.length) continue;
+      if (!service.covers(index)) return index;
+    }
+    return null;
   }
 
   /// Lazily create the sprite service — only when an adapter package has
@@ -1622,8 +1653,188 @@ class PlayerController {
   /// path degrades to the pre-sprite behavior.
   SpriteSweepService? _spriteService() {
     if (_isDisposed || !VidraPlayer.hasFrameSweeper) return null;
-    return _spriteSweepService ??= SpriteSweepService(
+    final existing = _spriteSweepService;
+    if (existing != null) return existing;
+    final created = SpriteSweepService(
       createSweeper: () => VidraPlayer.createFrameSweeper()!,
+      onHashesReady: _onEpisodeSwept,
+    );
+    _spriteSweepService = created;
+    // Hashes from previous sessions, so the first sweep of this one already
+    // has something to compare against. Fire-and-forget: a sweep takes
+    // minutes, so this always lands first, and if it does not the next
+    // completed sweep runs detection again anyway.
+    _loadStoredHashes(created);
+    return created;
+  }
+
+  Future<void> _loadStoredHashes(SpriteSweepService service) async {
+    final stored = await _mediaManager.loadEpisodeHashes();
+    if (_isDisposed || _spriteSweepService != service) return;
+    for (final entry in stored.entries) {
+      service.importHashes(entry.key, entry.value);
+    }
+    if (stored.isEmpty) return;
+    logger.i('[Detect] loaded stored hashes for ${stored.length} episodes');
+
+    // Compare them RIGHT NOW rather than waiting for this episode's own sweep.
+    // Two stored episodes are already a comparable pair, so a series detected
+    // in an earlier session can set its skip point the moment the player
+    // opens — otherwise the viewer waits ~40s of sweeping for an answer that
+    // has been on disk since yesterday, and an episode nobody ever sweeps
+    // (episode 3 onwards) never gets one at all.
+    final ready = service.episodesWithHashes();
+    if (ready.length >= 2) _detectSharedRuns(ready.first);
+  }
+
+  /// A sweep finished: look for an intro/outro this episode shares with
+  /// another swept one, and queue the next episode so the comparison has a
+  /// partner to find.
+  void _onEpisodeSwept(int episodeIndex) {
+    if (_isDisposed) return;
+    final blob = _spriteSweepService?.exportHashes(episodeIndex);
+    if (blob != null) _mediaManager.saveEpisodeHashes(episodeIndex, blob);
+    _detectSharedRuns(episodeIndex);
+    // The neighbour sweep is NOT kicked off here — the position tick picks
+    // the next target, so a decline (cooldown, in-flight) retries instead of
+    // being lost.
+  }
+
+  /// Compare [episodeIndex] against every other swept episode and write
+  /// `MarkerSource.detected` markers for both sides of the first match.
+  ///
+  /// Both sides on purpose: the partner is usually an episode the user has
+  /// already watched, so writing only the new one would leave the series
+  /// half-marked for no reason. Detected markers rank below manual ones, so
+  /// this can never overwrite a skip point the user placed by hand.
+  void _detectSharedRuns(int episodeIndex) {
+    final service = _spriteSweepService;
+    if (service == null) return;
+    final mine = service.hashedTiles(episodeIndex);
+    if (mine.length < 4) {
+      logger.i('[Detect] ep=$episodeIndex has ${mine.length} tiles, too few');
+      return;
+    }
+
+    final partners = service.episodesWithHashes()
+      ..removeWhere((e) => e == episodeIndex);
+    if (partners.isEmpty) {
+      // The common case early on, and previously silent — which reads
+      // identically to "detection is broken".
+      logger.i(
+        '[Detect] ep=$episodeIndex swept (${mine.length} tiles); '
+        'no other episode swept yet, nothing to compare against',
+      );
+      return;
+    }
+
+    for (final other in partners) {
+      if (other == episodeIndex) continue;
+      final theirs = service.hashedTiles(other);
+
+      final intro = SharedRunDetector.detectIntro(mine, theirs);
+
+      // The tail is only searchable when BOTH sweeps actually reached the end
+      // of their media: detectOutro measures backwards from the last tile, so
+      // a half-swept episode makes it treat wherever the sweep stopped as the
+      // credits. Measured — a mid-sweep episode against a complete one gave
+      // `outro=23s`, and that got written as a detected marker.
+      final tailUsable =
+          service.isComplete(episodeIndex) && service.isComplete(other);
+      final outro = tailUsable
+          ? SharedRunDetector.detectOutro(mine, theirs)
+          : null;
+
+      // Every null carries its reason. A bare "outro=null" cannot be told
+      // apart from "detection never ran" or "the bar was one bit too tight",
+      // and those need completely different fixes — measured twice now, each
+      // time costing an offline probe over dumped hashes to resolve.
+      String side(String kind, SharedRun? run, DetectionMiss Function() miss) {
+        if (run != null) return '$kind=${run.aSeconds}s';
+        final m = miss();
+        return '$kind=none(closest=${m.bestDistance}/64,'
+            'longestRun=${m.bestRunTiles})';
+      }
+
+      logger.i(
+        '[Detect] ep=$episodeIndex vs ep=$other '
+        '${side('intro', intro, () => SharedRunDetector.describeIntroMiss(mine, theirs))} '
+        '${tailUsable ? side('outro', outro, () => SharedRunDetector.describeOutroMiss(mine, theirs)) : 'outro=waiting(sweep incomplete)'} '
+        '(${mine.length}v${theirs.length} tiles)',
+      );
+      if (intro == null && outro == null) continue;
+
+      _writeDetected(episodeIndex, intro?.aSeconds, outro?.aSeconds);
+      _writeDetected(other, intro?.bSeconds, outro?.bSeconds);
+      _generaliseToSeries(intro, outro);
+      _maybeSkipIntroNow();
+      return; // One partner is enough; more would only re-confirm.
+    }
+  }
+
+  /// Carry a detected run to the SERIES-wide setting, so episodes that were
+  /// never swept skip too.
+  ///
+  /// Without this the feature only ever helps the two episodes that happened
+  /// to be compared: detection writes per-episode markers, every other episode
+  /// has none, and a viewer reaching episode 3 sits through the intro with the
+  /// answer already on disk. The manual path (`setSkipPoint`) has always
+  /// written both layers for exactly this reason.
+  ///
+  /// Two deliberate limits:
+  /// - only when the series-wide value is UNSET. It is a single number for the
+  ///   whole show and the user may have typed it; a detector must not overwrite
+  ///   a hand-entered one, and [EpisodeMarkers.outranks] cannot protect a
+  ///   [PlayerSetting], which carries no source.
+  /// - the SMALLER of the pair. The two episodes disagree (measured: 116s and
+  ///   102s for the same series), and this value is applied blind to episodes
+  ///   nobody has looked at. Skipping too little leaves a few seconds of intro;
+  ///   skipping too much eats the opening scene.
+  void _generaliseToSeries(SharedRun? intro, SharedRun? outro) {
+    if (intro == null) return;
+    if (playerSetting.skipIntro > 0) return;
+    final seconds = intro.aSeconds < intro.bSeconds
+        ? intro.aSeconds
+        : intro.bSeconds;
+    if (seconds <= 0) return;
+    logger.i('[Detect] series-wide skipIntro set to ${seconds}s');
+    updateSkipIntro(seconds);
+  }
+
+  /// Apply a marker that arrived WHILE the intro is still playing.
+  ///
+  /// The intro skip is decided once, at episode start, by the resume delegate.
+  /// Detection finishes ~40s into playback, long after that decision — so the
+  /// episode the intro was just found on would play its intro in full, with the
+  /// marker sitting unused. Measured as "第二集不会自动跳".
+  void _maybeSkipIntroNow() {
+    if (_isDisposed || _isSwitchingEpisode || _isSwitchingQuality) return;
+    final setting = effectiveSkipSetting;
+    if (!setting.autoSkip || setting.skipIntro <= 0) return;
+    final target = Duration(seconds: setting.skipIntro);
+    final position = _lastPosition.position;
+    // Only forward, and only from inside the intro: past it the user has
+    // already watched through, and yanking them forward would cut content.
+    if (position >= target || position < Duration.zero) return;
+    logger.i(
+      '[Detect] intro marker landed mid-intro; skipping '
+      '${position.inSeconds}s -> ${target.inSeconds}s',
+    );
+    seek(target, SeekSource.external);
+    _uiManager.showSkipIntroNotification();
+  }
+
+  void _writeDetected(int index, int? introEndSec, int? outroStartSec) {
+    if (introEndSec == null && outroStartSec == null) return;
+    _mediaManager.updateEpisodeMarkers(
+      EpisodeMarkers(
+        episodeIndex: index,
+        introEnd: introEndSec == null ? null : Duration(seconds: introEndSec),
+        outroStart: outroStartSec == null
+            ? null
+            : Duration(seconds: outroStartSec),
+        source: MarkerSource.detected,
+      ),
     );
   }
 
