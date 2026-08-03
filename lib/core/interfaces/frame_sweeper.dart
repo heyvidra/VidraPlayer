@@ -79,6 +79,18 @@ class SweepRequest {
   /// Stop sweeping once this position is reached (defaults to end of media).
   final Duration? endAt;
 
+  /// Awaited by the sweeper immediately before destroying its player.
+  /// Pausing/stopping the sweep is always safe; DESTRUCTION is not — on the
+  /// fvp engine the texture-player destructor runs on the platform thread
+  /// and waits for any in-flight render callback, and a render callback can
+  /// stay parked on mdk's shared render lock for as long as the foreground
+  /// keeps decoding (sampled live: main thread blocked 1130/1130 in
+  /// ~TexturePlayer -> setRenderCallback while the foreground played — a
+  /// whole-app deadlock, not a starve). The host completes this future only
+  /// when the foreground is not decoding; until then the sweeper must sit
+  /// parked. Null means dispose immediately.
+  final Future<void> Function()? disposeGate;
+
   const SweepRequest({
     required this.url,
     this.interval = const Duration(seconds: 10),
@@ -88,6 +100,7 @@ class SweepRequest {
     this.height = 90,
     this.startAt,
     this.endAt,
+    this.disposeGate,
   });
 
   /// Spacing that applies at content position [positionMs], given the media

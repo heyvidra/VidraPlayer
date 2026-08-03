@@ -1,3 +1,21 @@
+## 1.4.2
+
+### Fixed
+
+- **fvp: platform-thread deadlock when a cancelled sweep was disposed during
+  playback.** v1.4.1 cancelled the background sweep on resume, but the
+  cancel path destroyed the sweep player immediately — and `~TexturePlayer`
+  runs on the platform thread and joins any in-flight render callback. That
+  callback can stay parked on mdk's shared render lock for as long as the
+  foreground decodes (the foreground holds the lock across its frame-pacing
+  sleep), so the join never returned and the whole main thread froze
+  (sampled live: 1130/1130 in `setRenderCallback`). Cancelling now only
+  PAUSES the sweep player; destruction waits on a host-supplied
+  `SweepRequest.disposeGate` that opens at the next quiet window (foreground
+  paused/stopped or controller disposed). A parked, paused player lingers
+  (tens of MB) until then — a leak-shaped cost, deliberately preferred over
+  a deadlock-shaped one.
+
 ## 1.4.0
 
 ### Added

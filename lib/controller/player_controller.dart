@@ -1663,6 +1663,21 @@ class PlayerController {
     return null;
   }
 
+  /// Completes when it is safe for a sweeper to DESTROY its player: the
+  /// foreground not decoding (paused/stopped/ended) or this controller
+  /// disposed (engine already stopped by then). See
+  /// [SweepRequest.disposeGate] for why destruction during playback
+  /// deadlocks the platform thread on the fvp engine. Cancelling a sweep on
+  /// resume therefore only PARKS its player; the actual dispose fires here,
+  /// at the next quiet window. Polling, not a stream subscription: this runs
+  /// at most once per cancelled sweep and must outlive arbitrary controller
+  /// state churn in between.
+  Future<void> _sweepDisposeGate() async {
+    while (!_isDisposed && lifecycle.isPlaying) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
   /// Lazily create the sprite service — only when an adapter package has
   /// registered a [FrameSweeper] factory. Null otherwise, and every sprite
   /// path degrades to the pre-sprite behavior.
@@ -1673,6 +1688,7 @@ class PlayerController {
     final created = SpriteSweepService(
       createSweeper: () => VidraPlayer.createFrameSweeper()!,
       onHashesReady: _onEpisodeSwept,
+      disposeGate: _sweepDisposeGate,
     );
     _spriteSweepService = created;
     // Hashes from previous sessions, so the first sweep of this one already

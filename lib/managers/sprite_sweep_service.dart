@@ -30,9 +30,15 @@ class SpriteSweepService {
   SpriteSweepService({
     required FrameSweeper Function() createSweeper,
     this.onHashesReady,
+    this.disposeGate,
   }) : _createSweeper = createSweeper;
 
   final FrameSweeper Function() _createSweeper;
+
+  /// Forwarded into every [SweepRequest] — see [SweepRequest.disposeGate].
+  /// The controller supplies "complete when the foreground is not playing";
+  /// this class stays ignorant of playback state on purpose.
+  final Future<void> Function()? disposeGate;
 
   /// Called with the episode index when its hashes are worth acting on: once
   /// as soon as the head window is covered, and again when the sweep finishes.
@@ -200,6 +206,7 @@ class SpriteSweepService {
               fineInterval: fineInterval,
               fineRegion: fineRegion,
               startAt: resumeFrom,
+              disposeGate: disposeGate,
             ),
           )
           .listen(

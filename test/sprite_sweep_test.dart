@@ -238,6 +238,23 @@ void main() {
       service.dispose();
     });
 
+    test('disposeGate is forwarded into every sweep request', () async {
+      // The gate is the ONLY thing standing between a cancelled sweep and a
+      // platform-thread deadlock on fvp (dispose during foreground playback,
+      // sampled live on 1.6.5) — a service that silently drops it recreates
+      // that deadlock with no compile-time signal.
+      final sweeper = FakeSweeper();
+      Future<void> gate() async {}
+      final service = SpriteSweepService(
+        createSweeper: () => sweeper,
+        disposeGate: gate,
+      );
+      service.startSweep(episodeIndex: 0, url: 'http://x/low.m3u8');
+      await _settle();
+      expect(sweeper.requests.single.disposeGate, same(gate));
+      service.dispose();
+    });
+
     test(
       'cancel + restart across the async resolve gap yields ONE sweeper',
       () async {

@@ -145,6 +145,17 @@ class MdkFrameSweeper implements FrameSweeper {
       try {
         p.state = mdk.PlaybackState.paused;
         await Future<void>.delayed(const Duration(milliseconds: 300));
+        // Destruction — and ONLY destruction — must wait for the host's gate.
+        // dispose() reaches ~TexturePlayer on the platform thread, which
+        // joins any in-flight render callback; that callback can be parked
+        // on mdk's shared render lock for as long as the foreground decodes
+        // (the foreground holds it across its frame-pacing sleep, so a
+        // parked waiter starves indefinitely under first-fit mutexes).
+        // Disposing in that state deadlocks the MAIN thread — sampled live
+        // on a resume-from-pause: 1130/1130 in setRenderCallback. Pausing
+        // above is safe and stops the lock traffic; the player then lingers
+        // parked (tens of MB) until the foreground yields a quiet window.
+        await req.disposeGate?.call();
         p.dispose();
       } catch (_) {
         // A leaked player beats a crashed process.
