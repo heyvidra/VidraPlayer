@@ -1410,8 +1410,16 @@ class PlayerController {
       if (state.status != previousState.status) {
         if (state.isPlaying) {
           _applyWakelock(true);
+          // The sweep's decoder competes with the foreground for mdk's
+          // render-path lock (see _maybeStartSpriteSweep). Resuming playback
+          // evicts it; tiles already stored stay, and the next pause resumes
+          // the sweep past them.
+          _spriteSweepService?.cancelSweep();
         } else if (state.status == PlaybackStatus.paused) {
           _applyWakelock(false);
+          // Paused is the sweep's window: the foreground decoder is parked,
+          // so the lock is uncontended. Uses the last known position state.
+          _maybeStartSpriteSweep(_lastPosition);
 
           // Save history only on TRANSITION to paused. Switch guards: while
           // switching, media.currentEpisodeIndex is already advanced but the
@@ -1605,6 +1613,13 @@ class PlayerController {
     if (buffering.isBuffering || _isSwitchingEpisode || _isSwitchingQuality) {
       return;
     }
+    // NEVER while the foreground is playing. Two mdk players decoding at once
+    // share one internal render-path mutex, and a 3-second sample of a live
+    // hang showed the loser waiting on that lock in 1338/1338 frames while
+    // audio (a different path) ran on — the user sees a frozen picture with
+    // working sound. Sweeps run when playback is paused or ended; on resume
+    // the play handler cancels any sweep in flight.
+    if (lifecycle.isPlaying) return;
 
     final service = _spriteService();
     if (service == null || service.isSweeping) return;
