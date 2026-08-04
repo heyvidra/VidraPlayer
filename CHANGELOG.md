@@ -1,3 +1,16 @@
+## 1.4.3
+
+### Fixed
+
+- **macOS native thumbnails: zombie CoreMedia sessions.** Disposing a
+  thumbnail generator only dropped the dictionary reference; in-flight
+  `AVAssetImageGenerator` requests kept the underlying HLS stream session
+  alive — and on an expired stream URL, retrying forever (sampled live:
+  two CoreMedia queue threads pegged and the audio queue kept warm hours
+  after a pause). Dispose and deinit now cancel all generation, and every
+  request carries an 8s timeout that cancels outright — the Dart side
+  reads nil as "no preview" and the sprite fallback covers.
+
 ## 1.4.2
 
 ### Fixed

@@ -148,17 +148,26 @@ public class VidraPlayerPlugin: NSObject, FlutterPlugin {
     
     let time = CMTime(seconds: timeSeconds, preferredTimescale: 600)
     
+    // Answer exactly once, whether the generator calls back or the timeout
+    // fires first. Main-thread confined, so a plain flag is enough.
+    var finished = false
+    let finish: (Any?) -> Void = { value in
+        if finished { return }
+        finished = true
+        result(value)
+    }
+
     // Memory Optimization & Prevention of Leaks: Use [weak self]
     generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { [weak self] (requestedTime, image, actualTime, resultStatus, error) in
         DispatchQueue.main.async {
-            guard self != nil else { return }
+            guard self != nil else { return finish(nil) }
             
             if resultStatus == .succeeded, let cgImage = image {
                 let nsImage = NSImage(cgImage: cgImage, size: NSZeroSize)
                 if let tiffData = nsImage.tiffRepresentation,
                    let bitmapRep = NSBitmapImageRep(data: tiffData),
                    let jpegData = bitmapRep.representation(using: .jpeg, properties: [:]) {
-                    result(FlutterStandardTypedData(bytes: jpegData))
+                    finish(FlutterStandardTypedData(bytes: jpegData))
                     return
                 }
             }
@@ -166,24 +175,46 @@ public class VidraPlayerPlugin: NSObject, FlutterPlugin {
             if let error = error {
                 print("[VidraPlayerPlugin] Thumbnail generation error: \(error.localizedDescription)")
             }
-            result(nil)
+            finish(nil)
+        }
+    }
+
+    // A request against an EXPIRED HLS session never completes — CoreMedia's
+    // stream image generator sits inside retry forever, burning two queue
+    // threads and network (sampled live on 1.6.7 after a multi-hour pause:
+    // both sharedRootQueue threads pegged, AudioQueue kept warm). Cancel the
+    // request outright so the underlying stream session is torn down; the
+    // Dart side treats nil as "no preview" and the sprite fallback covers.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak generator] in
+        if !finished {
+            generator?.cancelAllCGImageGeneration()
+            finish(nil)
         }
     }
   }
   
   private func disposeThumbnailGenerator(url urlString: String?) {
+      // Dropping the dictionary reference is NOT enough: in-flight requests
+      // keep the generator's stream session alive (and, on a dead HLS URL,
+      // retrying forever). Cancel explicitly so dispose actually stops work.
       if let urlString = urlString {
           // Remove only this controller's generator.
-          imageGenerators.removeValue(forKey: urlString)
+          imageGenerators.removeValue(forKey: urlString)?.cancelAllCGImageGeneration()
           print("[VidraPlayerPlugin] Thumbnail generator disposed for: \(urlString)")
       } else {
           // Legacy/no-url call: clear all (matches old behavior).
+          for generator in imageGenerators.values {
+              generator.cancelAllCGImageGeneration()
+          }
           imageGenerators.removeAll()
           print("[VidraPlayerPlugin] All thumbnail generators disposed")
       }
   }
 
   deinit {
+      for generator in imageGenerators.values {
+          generator.cancelAllCGImageGeneration()
+      }
       imageGenerators.removeAll()
   }
 }
