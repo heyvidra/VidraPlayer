@@ -11,8 +11,10 @@ import 'package:vidra_player/core/interfaces/frame_sweeper.dart';
 ///   realtime (0.4x); the same content's lowest variant sweeps at 14x.
 /// - Audio track disabled + `setBufferRange(min: 60s)`: 9.2x -> 14.2x.
 /// - A parked player renders nothing — playback must be running before any
-///   grab, and `renderVideo()` must be pumped because nothing composites
-///   this texture.
+///   grab. Rendering is driven ENTIRELY by the texture's own render
+///   callback (self-sustaining once playing); a second Dart-side
+///   renderVideo() pump deadlocks against that callback — see the note in
+///   the sweep loop.
 /// - `dispose()` straight after a snapshot crashed the probe app; teardown
 ///   here pauses, settles, then disposes.
 class MdkFrameSweeper implements FrameSweeper {
@@ -95,7 +97,18 @@ class MdkFrameSweeper implements FrameSweeper {
         await Future<void>.delayed(Duration(milliseconds: pollMs));
         if (isCancelled()) return;
 
-        p.renderVideo();
+        // Deliberately NO Dart-side renderVideo() pump here. With
+        // updateTexture() in place the TexturePlayer's render callback is a
+        // self-sustaining driver: each delivered frame renders and thereby
+        // consumes the queue, which admits the next frame — no compositor
+        // required (this is exactly how foreground playback renders). A
+        // second driver from this isolate deadlocked in the field, sampled
+        // live on 1.6.8: the Dart pump held mdk's renderer mutex and waited
+        // on the player's recursive API mutex, while the render callback
+        // held the API mutex and waited on the renderer — ABBA, 2187/2187
+        // samples on both sides, whole UI isolate frozen. The 90s stall
+        // watchdog below covers the case where callback-driven rendering
+        // ever fails to sustain itself.
         final pos = p.position;
 
         if (endMs <= 0) {

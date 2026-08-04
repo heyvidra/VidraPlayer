@@ -1,3 +1,20 @@
+## 1.4.4
+
+### Fixed
+
+- **fvp: ABBA deadlock between the sweep's Dart render pump and its own
+  texture render callback.** The sweeper drove rendering twice: a Dart-side
+  `renderVideo()` poll AND the TexturePlayer callback registered by
+  `updateTexture()` — two threads entering mdk's render path with opposite
+  lock orders. Sampled live: the UI isolate held the renderer mutex waiting
+  on the player's recursive API mutex while the render callback held the
+  API mutex waiting on the renderer — both sides parked for the full
+  sample, the whole player window frozen. The callback is a self-sustaining
+  driver (it is how foreground playback renders), so the Dart pump is
+  simply removed; the 90s stall watchdog covers the pathological case.
+  Verified pump-free on device: 109 tiles hashed in the first 91 seconds
+  of a sweep.
+
 ## 1.4.3
 
 ### Fixed
