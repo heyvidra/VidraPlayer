@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:ffi';
 
+import 'package:ffi/ffi.dart';
 import 'package:fvp/mdk.dart' as mdk;
+// ignore: implementation_imports
+import 'package:fvp/src/generated_bindings.dart' as mdkc;
 import 'package:vidra_player/core/interfaces/frame_sweeper.dart';
 
 /// [FrameSweeper] on a raw mdk [mdk.Player]: sequential decode at boosted
@@ -11,12 +15,34 @@ import 'package:vidra_player/core/interfaces/frame_sweeper.dart';
 ///   realtime (0.4x); the same content's lowest variant sweeps at 14x.
 /// - Audio track disabled + `setBufferRange(min: 60s)`: 9.2x -> 14.2x.
 /// - A parked player renders nothing — playback must be running before any
-///   grab. Rendering is driven ENTIRELY by the texture's own render
-///   callback (self-sustaining once playing); a second Dart-side
-///   renderVideo() pump deadlocks against that callback — see the note in
-///   the sweep loop.
+///   grab, and `renderVideo()` must be pumped because nothing composites
+///   this player's frames. The pump is SAFE here and only here: the sweep
+///   detaches the texture's render callback first, so it is the only thing
+///   touching the renderer — see [_detachRenderCallback] for the two field
+///   deadlocks that a second driver caused.
 /// - `dispose()` straight after a snapshot crashed the probe app; teardown
 ///   here pauses, settles, then disposes.
+/// Clears the render callback fvp's `TexturePlayer` registers inside
+/// `updateTexture()` (`{ lock(tex.mtx); renderVideo(); frameAvailable(); }`).
+///
+/// fvp exposes no way to build the render target without that callback, and
+/// no way to unregister it — but it does expose the raw mdk handle, and mdk's
+/// C API takes a zeroed `mdkRenderCallback` as "none" (the C++ wrapper builds
+/// exactly this struct for `setRenderCallback(nullptr)`).
+void _detachRenderCallback(mdk.Player p) {
+  final api = Pointer<mdkc.mdkPlayerAPI>.fromAddress(p.nativeHandle);
+  final none = calloc<mdkc.mdkRenderCallback>();
+  try {
+    api.ref.setRenderCallback.asFunction<
+        void Function(Pointer<mdkc.mdkPlayer>, mdkc.mdkRenderCallback)>()(
+      api.ref.object,
+      none.ref,
+    );
+  } finally {
+    calloc.free(none);
+  }
+}
+
 class MdkFrameSweeper implements FrameSweeper {
   @override
   Stream<SweptFrame> sweep(SweepRequest request) {
@@ -40,6 +66,7 @@ class MdkFrameSweeper implements FrameSweeper {
     Completer<void> cancelSignal,
   ) async {
     final p = mdk.Player();
+    Timer? pump;
     try {
       p.media = req.url;
       p.mute = true;
@@ -65,8 +92,21 @@ class MdkFrameSweeper implements FrameSweeper {
       }
 
       // Both dimensions, or updateTexture returns -1 and nothing renders.
+      // The texture is the render TARGET and is not optional: mdk needs the
+      // Metal surface fvp builds here or renderVideo() draws nowhere and
+      // every snapshot fails (measured — and a failed snapshot hands fvp a
+      // null SnapshotRequest, which it dereferences: SIGSEGV, whole app).
       final tex = await p.updateTexture(width: req.width, height: req.height);
       if (tex < 0) throw StateError('sweep texture failed for ${req.url}');
+      // Keep the target, drop its render callback. That callback is what
+      // deadlocked twice in the field: v1.4.3, ABBA against this loop's pump
+      // across two threads; v1.4.4, with the pump gone, snapshot() drove the
+      // render inline on the UI isolate and the callback re-entered the
+      // renderer that same stack already held (sampled 2226/2226). Nobody
+      // composites the sweep's frames, so the callback only ever existed to
+      // feed a compositor that isn't there — detaching it leaves the pump
+      // below as the one and only driver, with nothing left to race.
+      _detachRenderCallback(p);
 
       const rate = 16.0;
       p.playbackRate = rate;
@@ -79,6 +119,17 @@ class MdkFrameSweeper implements FrameSweeper {
       // fraction of the FINEST interval expressed in wall time.
       final finestMs = (req.fineInterval ?? req.interval).inMilliseconds;
       final pollMs = ((finestMs / rate) / 4).clamp(30, 200).toInt();
+
+      // The pump lives OUTSIDE the sweep loop, and it has to: mdk completes a
+      // snapshot on the next redraw, so a pump inside the loop is parked by
+      // the very `await snapshot()` it has to service. Measured with the pump
+      // inline: 13 tiles where ~450 were due, every miss a 5s timeout that a
+      // late redraw then mis-delivered into the NEXT request. A timer keeps
+      // rendering while the loop is parked.
+      pump = Timer.periodic(
+        Duration(milliseconds: pollMs),
+        (_) => p.renderVideo(),
+      );
       // Resolved lazily below when the engine does not know it yet. mdk
       // reports duration right after prepare for the sources measured here,
       // but the media_kit sweeper hit exactly this with HLS: an early read
@@ -97,18 +148,6 @@ class MdkFrameSweeper implements FrameSweeper {
         await Future<void>.delayed(Duration(milliseconds: pollMs));
         if (isCancelled()) return;
 
-        // Deliberately NO Dart-side renderVideo() pump here. With
-        // updateTexture() in place the TexturePlayer's render callback is a
-        // self-sustaining driver: each delivered frame renders and thereby
-        // consumes the queue, which admits the next frame — no compositor
-        // required (this is exactly how foreground playback renders). A
-        // second driver from this isolate deadlocked in the field, sampled
-        // live on 1.6.8: the Dart pump held mdk's renderer mutex and waited
-        // on the player's recursive API mutex, while the render callback
-        // held the API mutex and waited on the renderer — ABBA, 2187/2187
-        // samples on both sides, whole UI isolate frozen. The 90s stall
-        // watchdog below covers the case where callback-driven rendering
-        // ever fails to sustain itself.
         final pos = p.position;
 
         if (endMs <= 0) {
@@ -156,6 +195,9 @@ class MdkFrameSweeper implements FrameSweeper {
       // Measured crash: dispose() immediately after a snapshot cycle takes
       // the native side down. Park it, let the vo settle, then dispose.
       try {
+        // Before anything else: a tick landing on a paused-and-torn-down
+        // player renders into freed state.
+        pump?.cancel();
         p.state = mdk.PlaybackState.paused;
         await Future<void>.delayed(const Duration(milliseconds: 300));
         // Destruction — and ONLY destruction — must wait for the host's gate.

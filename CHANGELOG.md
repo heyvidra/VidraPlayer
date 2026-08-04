@@ -1,3 +1,31 @@
+## 1.4.5
+
+### Fixed
+
+- **fvp: the sweep's snapshot re-entered the renderer and froze the player.**
+  1.4.4 removed the Dart render pump and left the texture's render callback
+  as the only driver — but `snapshot()` then had to drive the render itself,
+  inline on the UI isolate, and the callback re-entered the renderer that
+  same stack already held. Sampled live on a pause: 2226/2226 in the render
+  path, the whole player window dead. The callback is now detached right
+  after `updateTexture()` (mdk takes a zeroed `mdkRenderCallback` as "none")
+  so the sweep has a render target but no second driver. Nothing composites
+  these frames, so the callback had no consumer to begin with.
+- **fvp: the render pump has to live outside the sweep loop.** mdk completes
+  a snapshot on the next redraw, so pumping from the loop that `await`s the
+  snapshot parks the only thing that can finish it: every grab burned its
+  full 5s timeout and a late redraw then mis-delivered into the next
+  request. Measured 13 tiles where the same episode yields 109. The pump is
+  a `Timer.periodic` now and keeps rendering while the loop is parked.
+- **fvp: a failed snapshot killed the process** (fork patch, `callbacks.cpp`).
+  mdk hands the callback a NULL `SnapshotRequest` when it has no frame — no
+  frame decoded yet, EOF, renderer torn down — and fvp dereferenced it
+  unconditionally: SIGSEGV at `ret->stride`, captured live. It reports an
+  empty buffer now, which the Dart side already maps to `null`.
+
+Verified on device: a full 2642s episode swept in 119s for 109 tiles, main
+thread idle in the AppKit run loop afterwards.
+
 ## 1.4.4
 
 ### Fixed

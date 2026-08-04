@@ -17,6 +17,8 @@ dependencies:
     path: ../../
   video_player: ^2.11.1
   fvp: ^0.37.3
+  # For the raw mdk handle in frame_sweeper.dart's _detachRenderCallback.
+  ffi: ^2.1.0
 
 dev_dependencies:
   flutter_test:
