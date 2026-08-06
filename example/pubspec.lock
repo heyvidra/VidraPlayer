@@ -674,7 +674,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "1.4.4"
+    version: "1.4.5"
   vidra_player_kit:
     dependency: "direct main"
     description:

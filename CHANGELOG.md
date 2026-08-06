@@ -1,3 +1,24 @@
+## 1.4.6
+
+### Fixed
+
+- **macOS: a thumbnail reply outliving its engine crashed the app.** A
+  preview request answers on whichever comes first, the generator's callback
+  or an 8-second timeout — but neither checked whether the engine was still
+  there. Close the player window inside that window (or switch episode, which
+  disposes the generator) and the pending reply fired into a torn-down
+  engine: the `FlutterResult` block was already freed, so the reply walked
+  it and landed as a null jump on a Dart worker thread while it handled the
+  port message. Field crash report: `Bad pointer dereference at 0x0`, frame 0
+  `null` under `DartLibraryCalls::HandleMessage`, immediately after a
+  "Thumbnail generator disposed" line.
+
+  Both callbacks now check `self` — the plugin is deallocated with its engine
+  — and stay SILENT rather than answering. The generator callback previously
+  did the opposite: `guard self != nil else { return finish(nil) }`, which
+  replied precisely when there was nobody left to reply to. A pending Dart
+  future dies with the engine that owns it, which is the correct outcome.
+
 ## 1.4.5
 
 ### Fixed

@@ -150,6 +150,14 @@ public class VidraPlayerPlugin: NSObject, FlutterPlugin {
     
     // Answer exactly once, whether the generator calls back or the timeout
     // fires first. Main-thread confined, so a plain flag is enough.
+    //
+    // "Exactly once" is not the only rule: a FlutterResult must also not be
+    // called AT ALL once its engine is gone. Replying into a torn-down engine
+    // walks a freed reply block and lands as a null jump on a Dart worker
+    // thread while it handles the port message — which is the crash seen in
+    // the field, immediately after a "Thumbnail generator disposed" line.
+    // Both callbacks below therefore check `self` and stay silent rather than
+    // answering; a pending Dart future dies with the engine that owns it.
     var finished = false
     let finish: (Any?) -> Void = { value in
         if finished { return }
@@ -160,7 +168,10 @@ public class VidraPlayerPlugin: NSObject, FlutterPlugin {
     // Memory Optimization & Prevention of Leaks: Use [weak self]
     generator.generateCGImagesAsynchronously(forTimes: [NSValue(time: time)]) { [weak self] (requestedTime, image, actualTime, resultStatus, error) in
         DispatchQueue.main.async {
-            guard self != nil else { return finish(nil) }
+            // Deliberately NOT `finish(nil)` here — see above. The plugin is
+            // deallocated with its engine, so a nil self means there is
+            // nobody left to answer.
+            guard self != nil else { return }
             
             if resultStatus == .succeeded, let cgImage = image {
                 let nsImage = NSImage(cgImage: cgImage, size: NSZeroSize)
@@ -185,7 +196,11 @@ public class VidraPlayerPlugin: NSObject, FlutterPlugin {
     // both sharedRootQueue threads pegged, AudioQueue kept warm). Cancel the
     // request outright so the underlying stream session is torn down; the
     // Dart side treats nil as "no preview" and the sprite fallback covers.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak generator] in
+    DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self, weak generator] in
+        // Eight seconds is long enough for the player window to have been
+        // closed, taking the engine and this plugin with it. Firing the
+        // timeout then is the crash, not the cure.
+        guard self != nil else { return }
         if !finished {
             generator?.cancelAllCGImageGeneration()
             finish(nil)
