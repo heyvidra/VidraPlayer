@@ -1,3 +1,17 @@
+## 1.4.7
+
+### Changed
+
+- **The sprite thumbnail sweep waits out short pauses and sweeps gently on
+  low-core machines.** The sweep can only run while playback is paused (the
+  single-decoder constraint), which meant every pause — including the
+  half-second kind before a seek or an episode switch — spun up a second
+  demux+decode pipeline at 16x, and on a 2016 4c/8t Intel MBP that is the
+  moment the fans come on. Pausing now arms a 3-second deferral before the
+  sweep starts (play, seek-to-episode and quality switches cancel it), and
+  machines with 8 or fewer logical cores sweep at 8x with a doubled render
+  pump interval — same content-time sampling, half the concurrent load.
+
 ## 1.4.6
 
 ### Fixed

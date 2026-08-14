@@ -4,12 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vidra_player/controller/player_controller.dart';
 import 'package:vidra_player/core/events/player_lifecycle_event.dart';
+import 'package:vidra_player/core/interfaces/frame_sweeper.dart';
 import 'package:vidra_player/core/interfaces/window_delegate.dart';
 import 'package:vidra_player/core/interfaces/media_repository.dart';
 import 'package:vidra_player/core/interfaces/video_player.dart';
 import 'package:vidra_player/core/model/model.dart';
 import 'package:vidra_player/core/state/states.dart';
 import 'package:vidra_player/ui/overlays/switching_overlay.dart';
+import 'package:vidra_player/vidra_player_sdk.dart';
 
 class FakeVideoPlayer implements IVideoPlayer {
   final _positionCtrl = StreamController<Duration>.broadcast();
@@ -278,6 +280,15 @@ class FakeControllerMediaRepository implements MediaRepository {
 
   @override
   Future<void> savePlayerSettings(PlayerSetting setting) async {}
+}
+
+/// Sweeper whose stream never emits. The deferral cases below care about
+/// WHETHER the second decode pipeline spins up — the factory call is the
+/// observable — never about frames.
+class IdleSweeper implements FrameSweeper {
+  @override
+  Stream<SweptFrame> sweep(SweepRequest request) =>
+      StreamController<SweptFrame>().stream;
 }
 
 PlayerController _buildController({
@@ -979,6 +990,113 @@ void main() {
       final loads = player.initializedSources.length;
       await controller.switchEpisode(0);
       expect(player.initializedSources.length, loads);
+
+      await controller.dispose();
+    });
+  });
+
+  group('pause->sweep deferral', () {
+    // The sweep must not start until a pause has HELD for ~3s: most pauses
+    // die within a breath (tap-pause/tap-play, seeks, episode switches), and
+    // each false start spins up a whole second decode pipeline — on a 2016
+    // 4c/8t Intel MBP that is fans-on while the machine looks idle. These
+    // cases run against the real deferral, so this group costs wall time.
+    var sweepsStarted = 0;
+
+    setUp(() {
+      sweepsStarted = 0;
+      VidraPlayer.setFrameSweeperFactory(() {
+        sweepsStarted++;
+        return IdleSweeper();
+      });
+    });
+
+    tearDown(() => VidraPlayer.setFrameSweeperFactory(null));
+
+    // Playing past the 10s stability gate, so a pause is sweep-eligible.
+    Future<void> playTo30s(
+      PlayerController controller,
+      FakeVideoPlayer player,
+    ) async {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await controller.play();
+      player.emitPosition(const Duration(seconds: 30));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+
+    test(
+      'a pause that holds starts the sweep after the window, not at the pause',
+      () async {
+        final player = FakeVideoPlayer();
+        final controller = _buildController(player: player);
+        await playTo30s(controller, player);
+
+        await player.pause();
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
+        expect(
+          sweepsStarted,
+          0,
+          reason: 'inside the deferral window nothing may decode',
+        );
+
+        await Future<void>.delayed(const Duration(milliseconds: 2200));
+        expect(
+          sweepsStarted,
+          1,
+          reason: 'a held pause is exactly what the sweep waits for',
+        );
+
+        await controller.dispose();
+      },
+    );
+
+    test(
+      'a pause shorter than the deferral never spins up the pipeline',
+      () async {
+        final player = FakeVideoPlayer();
+        final controller = _buildController(player: player);
+        await playTo30s(controller, player);
+
+        await player.pause();
+        await Future<void>.delayed(const Duration(seconds: 1));
+        await player.play();
+
+        // Well past the instant the deferral would have fired.
+        await Future<void>.delayed(const Duration(seconds: 3));
+        expect(
+          sweepsStarted,
+          0,
+          reason: 'a tap-pause/tap-play must cost nothing',
+        );
+
+        await controller.dispose();
+      },
+    );
+
+    test('play during the deferral cancels it — a re-pause waits its own '
+        'full window', () async {
+      final player = FakeVideoPlayer();
+      final controller = _buildController(player: player);
+      await playTo30s(controller, player);
+
+      await player.pause(); // t=0: this window would fire at 3s.
+      await Future<void>.delayed(const Duration(seconds: 2));
+      await player.play(); // t=2: must kill that timer.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      await player.pause(); // t~2.1: a fresh window, firing ~5.1s.
+
+      // t~3.9: past the FIRST timer's fire instant. A leaked timer would
+      // have started a sweep into the second pause's window right here.
+      await Future<void>.delayed(const Duration(milliseconds: 1850));
+      expect(
+        sweepsStarted,
+        0,
+        reason: "the first pause's timer must be dead, not inherited",
+      );
+
+      // t~5.6: the second pause has now held its own full window.
+      await Future<void>.delayed(const Duration(milliseconds: 1700));
+      expect(sweepsStarted, 1);
 
       await controller.dispose();
     });

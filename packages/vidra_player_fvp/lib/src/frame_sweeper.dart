@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:ffi';
+import 'dart:io' show Platform;
 
 import 'package:ffi/ffi.dart';
 import 'package:fvp/mdk.dart' as mdk;
@@ -108,7 +109,13 @@ class MdkFrameSweeper implements FrameSweeper {
       // below as the one and only driver, with nothing left to race.
       _detachRenderCallback(p);
 
-      const rate = 16.0;
+      // One decision, both knobs. 16x decode saturates every core of a 2016
+      // 4c/8t Intel MBP — pausing spun the fans up on a machine that looked
+      // idle, then thermal throttling dragged the foreground down with it.
+      // <= 8 logical processors is that machine class: half the rate, and a
+      // pump half as eager. Anything wider keeps the measured 16x numbers.
+      final lowCore = Platform.numberOfProcessors <= 8;
+      final rate = lowCore ? 8.0 : 16.0;
       p.playbackRate = rate;
       p.state = mdk.PlaybackState.playing;
 
@@ -118,7 +125,9 @@ class MdkFrameSweeper implements FrameSweeper {
       // on different grids, killing cross-episode frame matching. Poll at a
       // fraction of the FINEST interval expressed in wall time.
       final finestMs = (req.fineInterval ?? req.interval).inMilliseconds;
-      final pollMs = ((finestMs / rate) / 4).clamp(30, 200).toInt();
+      final pollMs = ((finestMs / rate) / 4)
+          .clamp(lowCore ? 60 : 30, lowCore ? 400 : 200)
+          .toInt();
 
       // The pump lives OUTSIDE the sweep loop, and it has to: mdk completes a
       // snapshot on the next redraw, so a pump inside the loop is parked by

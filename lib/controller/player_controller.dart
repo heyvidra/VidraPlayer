@@ -152,6 +152,15 @@ class PlayerController {
   StreamSubscription<WindowEvent>? _windowSub;
   StreamSubscription<BufferingState>? _sweepBufferingSub;
 
+  // Pending pause->sweep start. Pausing does not open the sweep's window by
+  // itself — the pause has to HOLD for [_sweepStartDelay] first. Most pauses
+  // die within a breath (tap-pause/tap-play, a seek, an episode switch), and
+  // each false start spins up the whole second decode pipeline just to tear
+  // it down again — on a 2016 4c/8t Intel MBP that is fans-on the moment the
+  // machine looks idle. Every path that cancels the sweep kills this first.
+  Timer? _sweepStartDeferral;
+  static const _sweepStartDelay = Duration(seconds: 3);
+
   // Event System — transition->event derivation lives in the emitter; the
   // side effects keyed on the same transitions stay in this class.
   final _events = PlaybackEventEmitter();
@@ -473,7 +482,9 @@ class PlayerController {
     _isSwitchingEpisode = true;
     // Stop sweeping the episode being left: its tiles keep, but the new
     // episode's startup gets the whole pipe. The stable-playback trigger
-    // re-arms for the new episode on its own.
+    // re-arms for the new episode on its own. Pending deferral too — the
+    // pause it was timing just ended.
+    _sweepStartDeferral?.cancel();
     _spriteSweepService?.cancelSweep();
     // Snapshot the cancel generation: cancelSwitching() bumps it, turning this
     // flight stale. A stale flight must not play, must not re-end switching,
@@ -583,6 +594,7 @@ class PlayerController {
     final generation = _switchGeneration; // See _switchEpisodeInternal.
     // Same reasoning as the episode switch: the quality switch's open needs
     // the pipe more than the background sweep does. Resume re-arms after.
+    _sweepStartDeferral?.cancel();
     _spriteSweepService?.cancelSweep();
     try {
       // Start switching state
@@ -1413,13 +1425,22 @@ class PlayerController {
           // The sweep's decoder competes with the foreground for mdk's
           // render-path lock (see _maybeStartSpriteSweep). Resuming playback
           // evicts it; tiles already stored stay, and the next pause resumes
-          // the sweep past them.
+          // the sweep past them. A deferral still pending simply dies — that
+          // pause never earned its sweep.
+          _sweepStartDeferral?.cancel();
           _spriteSweepService?.cancelSweep();
         } else if (state.status == PlaybackStatus.paused) {
           _applyWakelock(false);
           // Paused is the sweep's window: the foreground decoder is parked,
-          // so the lock is uncontended. Uses the last known position state.
-          _maybeStartSpriteSweep(_lastPosition);
+          // so the lock is uncontended. But only once the pause has held for
+          // [_sweepStartDelay] — see [_sweepStartDeferral]. Uses the last
+          // known position state at FIRE time, so a seek made while waiting
+          // is honored.
+          _sweepStartDeferral?.cancel();
+          _sweepStartDeferral = Timer(_sweepStartDelay, () {
+            if (_isDisposed) return;
+            _maybeStartSpriteSweep(_lastPosition);
+          });
 
           // Save history only on TRANSITION to paused. Switch guards: while
           // switching, media.currentEpisodeIndex is already advanced but the
@@ -1620,6 +1641,10 @@ class PlayerController {
     // working sound. Sweeps run when playback is paused or ended; on resume
     // the play handler cancels any sweep in flight.
     if (lifecycle.isPlaying) return;
+    // Still inside the pause-deferral window. A seek while paused ticks the
+    // position stream straight into this trigger, and it must not beat the
+    // timer it exists to wait behind.
+    if (_sweepStartDeferral?.isActive ?? false) return;
 
     final service = _spriteService();
     if (service == null || service.isSweeping) return;
@@ -2135,6 +2160,9 @@ class PlayerController {
 
     // Internal
     _mouseMoveDebounce.dispose();
+    // Belt and braces with the callback's own _isDisposed check: a deferral
+    // firing into teardown must find nothing to start.
+    _sweepStartDeferral?.cancel();
     _thumbnailManager?.dispose();
     _thumbnailManager = null;
     _spriteSweepService?.dispose();
