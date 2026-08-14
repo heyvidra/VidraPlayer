@@ -84,14 +84,6 @@ class _FakeResponse extends Stream<List<int>> implements HttpClientResponse {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class _Overrides extends HttpOverrides {
-  final _RecordingHttpClient client;
-  _Overrides(this.client);
-
-  @override
-  HttpClient createHttpClient(SecurityContext? context) => client;
-}
-
 Future<WarmupResult> _warmup(String url, _RecordingHttpClient client) {
   return HttpOverrides.runZoned(
     () => NetworkResilience.preflightWarmup(url),
