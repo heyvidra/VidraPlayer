@@ -1,3 +1,14 @@
+## 1.4.8
+
+### Fixed
+
+- **CI has been red since 2026-08-06 on a dead test class.** `_warmup` passes
+  `createHttpClient:` to `HttpOverrides.runZoned` directly, so the
+  `HttpOverrides` subclass it replaced was left unreferenced — and this repo
+  analyzes with `--fatal-infos`, so every run since, v1.4.6 and v1.4.7
+  included, failed on that one warning. Removed; `actions/checkout` moved to
+  v5 at the same time, which stops the Node 20 deprecation warning.
+
 ## 1.4.7
 
 ### Changed
