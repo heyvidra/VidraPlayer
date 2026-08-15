@@ -1,3 +1,82 @@
+## 1.5.0
+
+### Changed
+
+- **Clicking the picture plays and pauses, instead of toggling the controls.**
+  With a pointer the controls are always one mouse-move away, so a click never
+  had to fetch them. Touch is unchanged and deliberately so: a touch screen has
+  no hover, so a tap there is the only way to reach the control bar at all, and
+  making it toggle playback would strand the bar out of reach. Taps beside a
+  resume/replay dialog remain no-ops — those cards have no full-screen barrier,
+  so outside taps land on the gesture layer, and the dialog's own buttons stay
+  the only exits.
+- **The controls leave with the pointer.** They used to sit on screen for the
+  full 3-second auto-hide after the mouse had left the window. Same exemptions
+  as that timer — an open menu, the episode panel, a dialog, and paused
+  playback all still hold them. Sliding from the picture onto a control bar
+  does not count as leaving: Flutter dispatches mouse exits before enters, so
+  that slide arrives as "left the player" for one dispatch, and hiding on it
+  flickered the bar out from under the pointer reaching for it.
+
+### Added
+
+- **`PlayerEffects.reduced`** — a global switch that drops the backdrop blur
+  from the episode list, dialogs, menus and the switching overlay. The blur
+  makes the GPU read back everything already drawn underneath, the live video
+  texture included, every frame; that is nearly free with Impeller on a
+  discrete GPU and brutal on an integrated Intel one running Skia. Host apps
+  with a "reduce effects" setting should mirror it here once at startup.
+
+### Fixed
+
+- **The centre play/pause button smeared during its morph.** It cross-faded a
+  play triangle and a pause glyph stacked on top of each other through two
+  `Opacity` layers, so for the whole 300ms both were on screen at partial alpha
+  and overlapping — and it cost two `saveLayer` offscreen buffers per frame.
+  One glyph now, swapped at the midpoint, carried by the scale pulse.
+
+### Performance
+
+Steady-state work removed from playback, all of it invisible in the output:
+
+- fvp ticks its position notifier from the render callback — 30-60 times a
+  second — and that reached widgets that change once a second. The time display
+  and the progress bar's invisible seek `Slider` (a gesture surface: transparent
+  track, zero-draw thumb) now update at second granularity. Both were doing this
+  with the controls hidden too, since the bars stay mounted behind a zero-height
+  `Align`.
+- `RevealAnimation` rebuilt the entire top and bottom bar subtree — nested
+  `StreamBuilder`s, icon rows, `AnimatedSwitcher`s — on every frame of the
+  300ms show/hide, i.e. after every auto-hide. The subtree is built once now;
+  only the `Align` factor tracks the animation.
+- The full-screen scrim faded with `AnimatedOpacity`, meaning a window-sized
+  `saveLayer` composited over the video every frame for 300ms on each show and
+  hide. It tweens the gradient's own alpha instead.
+- `handleMouseMove` cancelled and re-armed three timers and allocated two state
+  objects per event; a trackpad delivers over a hundred a second. Coalesced to
+  ~30Hz.
+- Cover images decode at the size they are drawn (`cacheWidth`) rather than at
+  source resolution.
+
+### Removed
+
+Breaking, though everything here was already inert:
+
+- `PlayerBehavior.bufferSize`, `.minBufferDuration`, `.maxBufferDuration`,
+  `.progressSaveInterval`, `.resumeOnFocus` and `PlayerUITheme.controlsOpacity`
+  had no readers. The three buffer knobs were the misleading kind — the fvp
+  adapter hard-codes `setBufferRange(min: 4000, max: 60000)`, so the one
+  setting you would reach for on a weak machine was wired to nothing. Wiring
+  them up is a separate change.
+- `RevealDirection.fromLeft` / `.fromRight` were never passed.
+- `InteractionState.activePointers` and `.hoverDuration` were declared and
+  copied but never written or read.
+- `NoScrollbarBehavior`; `ScrollConfiguration.of(context).copyWith(scrollbars:
+  false)` is the platform's own answer.
+- The `cached_network_image` dependency, along with its `flutter_cache_manager`
+  / `path_provider` / `sqflite` tail, for two cover images that `Image.network`
+  already caches in memory.
+
 ## 1.4.8
 
 ### Fixed

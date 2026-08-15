@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 
-enum RevealDirection { fromTop, fromBottom, fromLeft, fromRight }
+enum RevealDirection { fromTop, fromBottom }
 
 class RevealAnimation extends StatelessWidget {
   final Animation<double> animation; // 0.0 -> hidden, 1.0 -> shown
@@ -20,12 +20,19 @@ class RevealAnimation extends StatelessWidget {
   Widget build(BuildContext context) {
     Widget content = AnimatedBuilder(
       animation: animation,
-      builder: (context, _) {
+      // Built ONCE, not once per frame. This wraps the top and bottom control
+      // bars — a deep subtree of StreamBuilders, icon rows and nested
+      // AnimatedSwitchers — and rebuilding all of it for 300ms every time the
+      // controls showed or hid (i.e. on every mouse move after an auto-hide)
+      // was the single biggest stutter on low-end machines. Only the Align
+      // factors actually depend on the animation value; the fade is driven by
+      // FadeTransition's own listener, no rebuild needed.
+      child: FadeTransition(opacity: animation, child: child),
+      builder: (context, child) {
         return Align(
           alignment: _alignment,
-          heightFactor: _isVertical ? animation.value : 1.0,
-          widthFactor: _isHorizontal ? animation.value : 1.0,
-          child: FadeTransition(opacity: animation, child: child),
+          heightFactor: animation.value,
+          child: child,
         );
       },
     );
@@ -33,24 +40,12 @@ class RevealAnimation extends StatelessWidget {
     return clip ? ClipRect(child: content) : content;
   }
 
-  bool get _isVertical =>
-      direction == RevealDirection.fromTop ||
-      direction == RevealDirection.fromBottom;
-
-  bool get _isHorizontal =>
-      direction == RevealDirection.fromLeft ||
-      direction == RevealDirection.fromRight;
-
   Alignment get _alignment {
     switch (direction) {
       case RevealDirection.fromTop:
         return Alignment.topCenter;
       case RevealDirection.fromBottom:
         return Alignment.bottomCenter;
-      case RevealDirection.fromLeft:
-        return Alignment.centerLeft;
-      case RevealDirection.fromRight:
-        return Alignment.centerRight;
     }
   }
 }

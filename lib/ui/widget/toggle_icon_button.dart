@@ -78,51 +78,52 @@ class _PlayPauseButtonState extends State<PlayPauseButton>
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: widget.onTap,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          return Stack(
-            alignment: Alignment.center,
-            children: [
-              Container(
-                width: widget.size * 1.6 * _circleAnim.value,
-                height: widget.size * 1.6 * _circleAnim.value,
-                decoration: BoxDecoration(
-                  color: widget.color.withValues(
-                    alpha: 0.2 * _circleAnim.value,
+      child: RepaintBoundary(
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            return Stack(
+              alignment: Alignment.center,
+              children: [
+                // Fixed box scaled by transform. Animating width/height
+                // relaid out this Stack (and its parents) on every frame of
+                // the morph; a Transform is paint-only.
+                Transform.scale(
+                  scale: _circleAnim.value,
+                  child: Container(
+                    width: widget.size * 1.6,
+                    height: widget.size * 1.6,
+                    decoration: BoxDecoration(
+                      color: widget.color.withValues(
+                        alpha: 0.2 * _circleAnim.value,
+                      ),
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                  shape: BoxShape.circle,
                 ),
-              ),
 
-              // Scale icon
-              Transform.scale(
-                scale: _scaleAnim.value,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    Opacity(
-                      opacity: 1 - _controller.value,
-                      child: Icon(
-                        Icons.play_arrow,
-                        size: widget.size,
-                        color: widget.color,
-                      ),
-                    ),
-                    Opacity(
-                      opacity: _controller.value,
-                      child: Icon(
-                        Icons.pause,
-                        size: widget.size,
-                        color: widget.color,
-                      ),
-                    ),
-                  ],
+                // Scale icon.
+                //
+                // ONE glyph, swapped at the midpoint. This used to cross-fade
+                // two stacked Icons through `Opacity`, which meant that for
+                // the whole 300ms morph the triangle and the two bars were
+                // both on screen at partial alpha, overlapping — it read as a
+                // smeared, garbled glyph rather than a transition. It also
+                // cost two `saveLayer` offscreen buffers per frame, which is
+                // the expensive kind of cheap on a Skia/Intel GPU. The scale
+                // pulse carries the transition on its own.
+                Transform.scale(
+                  scale: _scaleAnim.value,
+                  child: Icon(
+                    _controller.value >= 0.5 ? Icons.pause : Icons.play_arrow,
+                    size: widget.size,
+                    color: widget.color,
+                  ),
                 ),
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
       ),
     );
   }

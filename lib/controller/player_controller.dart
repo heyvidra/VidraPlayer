@@ -1248,6 +1248,38 @@ class PlayerController {
   void handleMouseEnterControls() => _uiManager.handleMouseEnterControls();
   void handleMouseLeaveControls() => _uiManager.handleMouseLeaveControls();
 
+  /// A tap on the video picture itself (not on a control).
+  ///
+  /// Mouse and touch mean different things by it, and both readings are the
+  /// platform convention:
+  ///
+  /// - With a pointer, clicking the picture plays/pauses. The controls are
+  ///   always one mouse-move away, so a click doesn't have to fetch them.
+  /// - On a touch screen, the tap has to summon the controls, because there
+  ///   is no hover — it is the only way to reach them at all. Playback there
+  ///   is toggled with the center button the tap just revealed.
+  void handleVideoTap({required bool isTouch}) {
+    if (_isDisposed) return;
+
+    // A dialog owns the screen: its card has no full-screen barrier, so
+    // taps beside it land here. They must neither summon pointer-dead
+    // control bars nor start playback behind the card — the dialog's own
+    // buttons are the only exits.
+    final ui = visibility;
+    if (ui.showResumeDialog || ui.showReplayDialog) return;
+
+    if (isTouch) {
+      toggleControls();
+      return;
+    }
+
+    // Bring the controls up with the click. Pausing into a bare picture gives
+    // no feedback that anything registered; and this costs nothing on resume,
+    // where the usual auto-hide takes them away again three seconds later.
+    showControls();
+    togglePlayPause();
+  }
+
   Future<void> stepPlaybackSpeed(int direction) async {
     if (_isDisposed || !config.features.enablePlaybackSpeed || direction == 0) {
       return;

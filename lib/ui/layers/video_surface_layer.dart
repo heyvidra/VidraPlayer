@@ -1,4 +1,3 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../controller/player_controller.dart';
 import '../../core/state/states.dart';
@@ -32,10 +31,18 @@ class VideoSurfaceLayer extends StatelessWidget {
           return Stack(
             fit: StackFit.expand,
             children: [
-              CachedNetworkImage(
-                imageUrl: coverUrl,
+              // cacheWidth caps the decode at the window width. Without it a
+              // 4K poster decodes at full size behind a black scrim, which on
+              // a low-end machine is the most expensive thing on screen before
+              // the video has even opened.
+              Image.network(
+                coverUrl,
                 fit: BoxFit.cover,
-                errorWidget: (context, url, error) => const SizedBox.shrink(),
+                cacheWidth: (MediaQuery.sizeOf(context).width *
+                        MediaQuery.devicePixelRatioOf(context))
+                    .round(),
+                errorBuilder: (context, error, stack) =>
+                    const SizedBox.shrink(),
               ),
               Container(color: Colors.black54),
             ],

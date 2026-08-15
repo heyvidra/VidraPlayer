@@ -47,6 +47,24 @@ class UIStateManager {
   // Timers
   // ===============================================================
 
+  static const _kMouseMoveThrottle = Duration(milliseconds: 33);
+  DateTime? _lastMouseMoveAt;
+
+  /// Grace between the pointer leaving the video and the controls going away.
+  ///
+  /// Not a delay for its own sake. Flutter's mouse tracker dispatches every
+  /// EXIT before any ENTER, so sliding the cursor off the picture and onto the
+  /// bottom bar arrives here as "left the player", with nothing yet saying the
+  /// pointer landed on a control — hiding on that would yank the bar out from
+  /// under the pointer reaching for it. Verified: drop the re-check on the far
+  /// side of this delay and that slide emits `showControls: false`, then true
+  /// again ~50ms later. The end state is right; the flicker is not.
+  ///
+  /// Zero would technically do — both dispatches land in one synchronous block
+  /// — but the margin also covers a pointer crossing a gap that belongs to
+  /// neither region across two frames.
+  static const _kLeaveGrace = Duration(milliseconds: 80);
+
   Timer? _autoHideTimer;
   Timer? _mouseHideTimer;
   Timer? _interactionDebounceTimer;
@@ -197,6 +215,20 @@ class UIStateManager {
 
     final now = DateTime.now();
 
+    // A trackpad delivers 100+ moves a second, and everything below is
+    // per-event work: two state allocations, a broadcast emission, and three
+    // timers cancelled and re-armed. None of it changes anything twice within
+    // one gesture, so coalesce to ~30Hz.
+    //
+    // Nothing observable moves. An isolated move always passes (the previous
+    // one is long past) — only mid-burst events are dropped, and a burst
+    // always has a leading event that gets through. The auto-hide window this
+    // re-arms is 3 seconds, and _showControlsTemporarily debounces by 50ms on
+    // top of it.
+    final last = _lastMouseMoveAt;
+    if (last != null && now.difference(last) < _kMouseMoveThrottle) return;
+    _lastMouseMoveAt = now;
+
     _interaction = _interaction.copyWith(
       lastMouseMove: now,
       isMouseActive: true,
@@ -254,6 +286,11 @@ class UIStateManager {
     if (_isPlaying && _windowHasFocus) {
       _resetAutoHideTimer();
     }
+
+    // Leaving the window straight off a control bar never touches the video's
+    // MouseRegion — it was already exited on the way in — so this is the only
+    // place that hears about it, and it's the common way out of the player.
+    _resetAutoHideTimer(overrideDelay: _kLeaveGrace);
   }
 
   /// Handle mouse enter video
@@ -274,6 +311,8 @@ class UIStateManager {
     if (!_interaction.isHoveringControls) {
       _hideMouse();
     }
+
+    _resetAutoHideTimer(overrideDelay: _kLeaveGrace);
   }
 
   /// Handle keyboard interaction
@@ -804,8 +843,18 @@ class UIStateManager {
     }
   }
 
-  void _resetAutoHideTimer() {
+  /// [overrideDelay] is the "pointer left the player" path: same guards, same
+  /// re-check, just sooner and without the recent-interaction debounce (the
+  /// interaction that armed it was moving the mouse out, so the debounce would
+  /// bounce it straight back to the full delay).
+  void _resetAutoHideTimer({Duration? overrideDelay}) {
     _autoHideTimer?.cancel();
+
+    // Pointer-left path: drop any pending show-on-move debounce. Leaving
+    // within 50ms of a move is the normal way to leave — you move toward the
+    // edge and keep going — and that pending timer would fire just after this
+    // one is armed and re-arm it at the full delay, undoing the whole thing.
+    if (overrideDelay != null) _interactionDebounceTimer?.cancel();
 
     if (_isDisposed || !_isPlaying) {
       return;
@@ -829,9 +878,11 @@ class UIStateManager {
       return;
     }
 
-    final delay = _viewMode.isFullscreen
-        ? Duration(seconds: _behavior.autoHideDelay.inSeconds ~/ 2)
-        : _behavior.autoHideDelay;
+    final delay =
+        overrideDelay ??
+        (_viewMode.isFullscreen
+            ? Duration(seconds: _behavior.autoHideDelay.inSeconds ~/ 2)
+            : _behavior.autoHideDelay);
 
     _autoHideTimer = Timer(delay, () {
       if (_isDisposed || !_isPlaying) {
@@ -845,7 +896,9 @@ class UIStateManager {
       }
 
       // 2. Check if there was recent interaction (debounce)
-      final lastInteraction = _getLastInteractionTime();
+      final lastInteraction = overrideDelay == null
+          ? _getLastInteractionTime()
+          : null;
       if (lastInteraction != null) {
         final timeSinceInteraction = DateTime.now().difference(lastInteraction);
         if (timeSinceInteraction < delay) {

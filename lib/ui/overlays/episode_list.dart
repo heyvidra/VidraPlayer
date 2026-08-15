@@ -6,7 +6,6 @@ import '../../core/localization/localization.dart';
 import '../../core/model/model.dart';
 
 import '../../utils/screen.dart';
-import '../../utils/no_scrollbar_behavior.dart';
 import '../widget/blur.dart';
 
 /// Episode list component
@@ -258,7 +257,9 @@ class _EpisodeListState extends State<EpisodeList> {
         return false;
       },
       child: ScrollConfiguration(
-        behavior: NoScrollbarBehavior(),
+        behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(scrollbars: false),
         child: GridView.builder(
           controller: _scrollController,
           padding: const EdgeInsets.all(12.0),

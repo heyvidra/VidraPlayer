@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../controller/player_controller.dart';
 import '../../core/state/quality_switching.dart';
@@ -116,10 +115,18 @@ class _SwitchingOverlayState extends State<SwitchingOverlay> {
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8),
-                        child: CachedNetworkImage(
-                          imageUrl: widget.coverUrl!,
+                        // Decoded at the 200x120 it is drawn at, not at
+                        // whatever the source happens to be — a 4K poster
+                        // behind a switching overlay is megabytes of bitmap on
+                        // a machine already busy opening a decoder.
+                        child: Image.network(
+                          widget.coverUrl!,
                           fit: BoxFit.cover,
-                          errorWidget: (context, url, error) {
+                          cacheWidth:
+                              (200 *
+                                      MediaQuery.devicePixelRatioOf(context))
+                                  .round(),
+                          errorBuilder: (context, error, stack) {
                             return Container(
                               color: theme.controlsBackground,
                               child: Icon(

@@ -130,23 +130,31 @@ class _FakeVideoPlayer implements IVideoPlayer {
   }
 }
 
-/// Reads the center PlayPauseButton's effective glyph: the pause icon's
-/// opacity is the morph controller's value (1 = pause glyph, 0 = play glyph).
-double _centerPauseOpacity(WidgetTester tester) {
-  final opacities = tester.widgetList<Opacity>(
-    find.descendant(
-      of: find.byType(PlayPauseButton),
-      matching: find.byType(Opacity),
-    ),
-  );
-  for (final o in opacities) {
-    final iconFinder = find.descendant(
-      of: find.byWidget(o),
-      matching: find.byIcon(Icons.pause),
+/// Reads the center PlayPauseButton's effective glyph.
+///
+/// The button renders exactly ONE icon — the morph is a scale pulse with the
+/// glyph swapped at the animation midpoint — so "is the pause glyph mounted"
+/// IS the button's state. (It used to cross-fade two stacked `Opacity` icons,
+/// and this probe read the alpha of one of them; that overlap is the visual
+/// bug that got removed, so the exactly-one check below is now itself part of
+/// what's under test.)
+bool _centerShowsPause(WidgetTester tester) {
+  final button = find.byType(PlayPauseButton);
+  final showsPause = find
+      .descendant(of: button, matching: find.byIcon(Icons.pause))
+      .evaluate()
+      .isNotEmpty;
+  final showsPlay = find
+      .descendant(of: button, matching: find.byIcon(Icons.play_arrow))
+      .evaluate()
+      .isNotEmpty;
+  if (showsPause == showsPlay) {
+    fail(
+      'PlayPauseButton must show exactly one glyph '
+      '(pause: $showsPause, play: $showsPlay)',
     );
-    if (iconFinder.evaluate().isNotEmpty) return o.opacity;
   }
-  fail('pause glyph not found inside PlayPauseButton');
+  return showsPause;
 }
 
 void main() {
@@ -199,7 +207,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400)); // finish morph
 
     expect(controller.lifecycle.isPlaying, isTrue);
-    expect(_centerPauseOpacity(tester), 1.0,
+    expect(_centerShowsPause(tester), isTrue,
         reason: 'playing: center must show pause glyph');
 
     // Enter PiP: macOS shrinks the SAME window to ~500x280.
@@ -226,7 +234,7 @@ void main() {
 
     // Both buttons must agree with reality (paused -> play glyphs).
     expect(controller.lifecycle.isPlaying, isFalse);
-    expect(_centerPauseOpacity(tester), 0.0,
+    expect(_centerShowsPause(tester), isFalse,
         reason: 'paused: center must show play glyph');
     final bottomPlay = find.descendant(
       of: find.byKey(const ValueKey('bottom_bar_play_pause_button')),
@@ -285,7 +293,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 400));
     expect(controller.lifecycle.isPlaying, isFalse);
-    expect(_centerPauseOpacity(tester), 0.0);
+    expect(_centerShowsPause(tester), isFalse);
 
     // Tap center while play() is rejected (PiP/native quirk, autoplay
     // block...): the optimistic playing emission and its rollback coalesce
@@ -297,7 +305,7 @@ void main() {
 
     expect(controller.lifecycle.isPlaying, isFalse,
         reason: 'play() failed — state must stay paused');
-    expect(_centerPauseOpacity(tester), 0.0,
+    expect(_centerShowsPause(tester), isFalse,
         reason: 'center morph must converge back to the play glyph, '
             'matching the bottom-bar icon');
 

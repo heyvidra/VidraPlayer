@@ -49,7 +49,12 @@ class GestureDetectorLayer extends StatelessWidget {
             onExit: (_) => controller.handleMouseLeaveVideo(),
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onTap: () => controller.toggleControls(),
+              // onTapUp, not onTap, purely to get the pointer kind — the
+              // arena behaviour is identical (both fire only once the tap
+              // recognizer has beaten the double-tap-to-seek recognizer).
+              onTapUp: (details) => controller.handleVideoTap(
+                isTouch: details.kind == PointerDeviceKind.touch,
+              ),
               onDoubleTapDown: (details) =>
                   onDoubleTap?.call(details.localPosition),
               child: const SizedBox.expand(),

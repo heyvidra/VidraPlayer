@@ -78,46 +78,36 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
       },
       child: ColoredBox(
         color: Colors.black,
-        child: CustomMultiChildLayout(
-          delegate: VideoPlayerLayoutDelegate(),
+        // Every layer is full-bleed and stacked in order. That is exactly
+        // StackFit.expand — the CustomMultiChildLayout this used to be ran a
+        // delegate that tight-constrained all five children to the incoming
+        // size and positioned each at zero, i.e. reimplemented Stack, and paid
+        // five LayoutId ParentDataWidgets for it.
+        child: Stack(
+          fit: StackFit.expand,
           children: [
             // 1. Video Display Area
-            LayoutId(
-              id: 'video',
-              child: VideoSurfaceLayer(
-                controller: widget.controller,
-                customLoading: widget.customLoading,
-              ),
+            VideoSurfaceLayer(
+              controller: widget.controller,
+              customLoading: widget.customLoading,
             ),
             // 2. Background Interaction Layer
-            LayoutId(
-              id: 'gestures',
-              child: GestureDetectorLayer(
-                controller: widget.controller,
-                onDoubleTap: _handleDoubleTap,
-              ),
+            GestureDetectorLayer(
+              controller: widget.controller,
+              onDoubleTap: _handleDoubleTap,
             ),
             // 3. Buffering Indicator
-            LayoutId(
-              id: 'indicators',
-              child: BufferingIndicatorLayer(
-                controller: widget.controller,
-                customLoading: widget.customLoading,
-              ),
+            BufferingIndicatorLayer(
+              controller: widget.controller,
+              customLoading: widget.customLoading,
             ),
             // 4. Error Display
-            LayoutId(
-              id: 'errors',
-              child: ErrorDisplayLayer(
-                controller: widget.controller,
-                customError: widget.customError,
-              ),
+            ErrorDisplayLayer(
+              controller: widget.controller,
+              customError: widget.customError,
             ),
             // 5. UI Controls & Overlays
-            LayoutId(
-              id: 'controls',
-              child: ControlsOverlayLayer(controller: widget.controller),
-            ),
+            ControlsOverlayLayer(controller: widget.controller),
           ],
         ),
       ),
@@ -222,33 +212,4 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget>
     }
     return true;
   }
-}
-
-class VideoPlayerLayoutDelegate extends MultiChildLayoutDelegate {
-  @override
-  void performLayout(Size size) {
-    if (hasChild('video')) {
-      layoutChild('video', BoxConstraints.tight(size));
-      positionChild('video', Offset.zero);
-    }
-    if (hasChild('gestures')) {
-      layoutChild('gestures', BoxConstraints.tight(size));
-      positionChild('gestures', Offset.zero);
-    }
-    if (hasChild('indicators')) {
-      layoutChild('indicators', BoxConstraints.tight(size));
-      positionChild('indicators', Offset.zero);
-    }
-    if (hasChild('errors')) {
-      layoutChild('errors', BoxConstraints.tight(size));
-      positionChild('errors', Offset.zero);
-    }
-    if (hasChild('controls')) {
-      layoutChild('controls', BoxConstraints.tight(size));
-      positionChild('controls', Offset.zero);
-    }
-  }
-
-  @override
-  bool shouldRelayout(covariant MultiChildLayoutDelegate oldDelegate) => false;
 }

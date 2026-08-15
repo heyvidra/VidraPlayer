@@ -150,28 +150,45 @@ class ControlsOverlayLayer extends StatelessWidget {
     return Stack(
       fit: StackFit.expand,
       children: [
-        // Gradient Overlay
+        // Gradient Overlay.
+        //
+        // Faded by tweening the gradient's own alpha, NOT with AnimatedOpacity.
+        // This box is the size of the window and sits directly on top of the
+        // video, so an opacity animation over it meant a full-screen
+        // `saveLayer` — allocate an offscreen buffer the size of the player,
+        // draw into it, composite it back — on every frame for 300ms, every
+        // single time the controls showed or hid. Painting the same gradient
+        // with pre-multiplied alpha is one flat fill and looks identical.
         Positioned.fill(
           child: IgnorePointer(
             ignoring: true,
-            child: AnimatedOpacity(
-              opacity: visibility.showControls ? 1.0 : 0.0,
-              duration: const Duration(milliseconds: 300),
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      theme.backgroundColor.withAlpha(128),
-                      Colors.transparent,
-                      Colors.transparent,
-                      theme.backgroundColor.withAlpha(128),
-                    ],
-                    stops: const [0.0, 0.2, 0.8, 1.0],
-                  ),
-                ),
+            child: TweenAnimationBuilder<double>(
+              tween: Tween<double>(
+                end: visibility.showControls ? 1.0 : 0.0,
               ),
+              duration: const Duration(milliseconds: 300),
+              builder: (context, t, _) {
+                if (t == 0) return const SizedBox.expand();
+                final edge = theme.backgroundColor.withValues(
+                  alpha: theme.backgroundColor.a * (128 / 255) * t,
+                );
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        edge,
+                        Colors.transparent,
+                        Colors.transparent,
+                        edge,
+                      ],
+                      stops: const [0.0, 0.2, 0.8, 1.0],
+                    ),
+                  ),
+                  child: const SizedBox.expand(),
+                );
+              },
             ),
           ),
         ),

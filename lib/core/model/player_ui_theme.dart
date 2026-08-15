@@ -14,7 +14,6 @@ class PlayerUITheme {
   final Color dialogBackgroundColor;
   final Color dialogTextColor;
   final BorderRadius borderRadius;
-  final double controlsOpacity;
   final Duration animationDuration;
 
   const PlayerUITheme({
@@ -30,7 +29,6 @@ class PlayerUITheme {
     required this.dialogBackgroundColor,
     required this.dialogTextColor,
     required this.borderRadius,
-    required this.controlsOpacity,
     required this.animationDuration,
   });
 
@@ -82,7 +80,6 @@ class PlayerUITheme {
       dialogBackgroundColor = const Color(0xFF1E1F24),
       dialogTextColor = Colors.white,
       borderRadius = BorderRadius.zero,
-      controlsOpacity = 0.85,
       animationDuration = const Duration(milliseconds: 200);
 
   /// Dark Immersive Theme
@@ -99,7 +96,6 @@ class PlayerUITheme {
       dialogBackgroundColor = const Color(0xFF1C1C1E),
       dialogTextColor = Colors.white,
       borderRadius = BorderRadius.zero,
-      controlsOpacity = 0.9,
       animationDuration = const Duration(milliseconds: 220);
 
   /// Light Player Theme (Education / Documentation)
@@ -116,7 +112,6 @@ class PlayerUITheme {
       dialogBackgroundColor = Colors.white,
       dialogTextColor = Colors.black87,
       borderRadius = BorderRadius.zero,
-      controlsOpacity = 0.85,
       animationDuration = const Duration(milliseconds: 200);
 
   /// Netflix Style
@@ -133,7 +128,6 @@ class PlayerUITheme {
       dialogBackgroundColor = const Color(0xFF141414),
       dialogTextColor = Colors.white,
       borderRadius = BorderRadius.zero,
-      controlsOpacity = 1.0,
       animationDuration = const Duration(milliseconds: 250);
 
   /// Cinema Style
@@ -150,7 +144,6 @@ class PlayerUITheme {
       dialogBackgroundColor = const Color(0xFF1A1A1A),
       dialogTextColor = const Color(0xFFF5F1E6),
       borderRadius = BorderRadius.zero,
-      controlsOpacity = 0.9,
       animationDuration = const Duration(milliseconds: 300);
 
   /// Minimalist Style
@@ -167,7 +160,6 @@ class PlayerUITheme {
       dialogBackgroundColor = const Color(0xCC000000),
       dialogTextColor = Colors.white,
       borderRadius = const BorderRadius.all(Radius.circular(8)),
-      controlsOpacity = 0.65,
       animationDuration = const Duration(milliseconds: 150);
 
   /// YouTube Style
@@ -184,6 +176,5 @@ class PlayerUITheme {
       dialogBackgroundColor = const Color(0xFF212121),
       dialogTextColor = Colors.white,
       borderRadius = BorderRadius.zero,
-      controlsOpacity = 0.9,
       animationDuration = const Duration(milliseconds: 200);
 }

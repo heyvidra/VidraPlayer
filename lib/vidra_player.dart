@@ -59,6 +59,7 @@ export 'controller/player_controller.dart' show PlayerController;
 export 'ui/player_widget.dart' show VideoPlayerWidget;
 
 // Configuration Models
+export 'core/player_effects.dart' show PlayerEffects;
 export 'core/model/player_config.dart' show PlayerConfig;
 export 'core/model/player_ui_theme.dart' show PlayerUITheme;
 export 'core/model/player_locale.dart' show VidraLocale;

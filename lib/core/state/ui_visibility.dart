@@ -157,8 +157,6 @@ class InteractionState {
   final bool isHoveringControls;
   final bool isHoveringVideo;
   final Offset? lastMousePosition;
-  final Duration hoverDuration;
-  final Set<int> activePointers;
 
   const InteractionState({
     this.lastMouseMove,
@@ -168,8 +166,6 @@ class InteractionState {
     this.isHoveringControls = false,
     this.isHoveringVideo = true,
     this.lastMousePosition,
-    this.hoverDuration = Duration.zero,
-    this.activePointers = const {},
   });
 
   InteractionState copyWith({
@@ -180,8 +176,6 @@ class InteractionState {
     bool? isHoveringControls,
     bool? isHoveringVideo,
     Offset? lastMousePosition,
-    Duration? hoverDuration,
-    Set<int>? activePointers,
   }) {
     return InteractionState(
       lastMouseMove: lastMouseMove ?? this.lastMouseMove,
@@ -192,8 +186,6 @@ class InteractionState {
       isHoveringControls: isHoveringControls ?? this.isHoveringControls,
       isHoveringVideo: isHoveringVideo ?? this.isHoveringVideo,
       lastMousePosition: lastMousePosition ?? this.lastMousePosition,
-      hoverDuration: hoverDuration ?? this.hoverDuration,
-      activePointers: activePointers ?? this.activePointers,
     );
   }
 }

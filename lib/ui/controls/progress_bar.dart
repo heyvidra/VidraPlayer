@@ -52,6 +52,18 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     with TickerProviderStateMixin {
   late final ValueNotifier<double> _currentPosition;
 
+  /// Same value as [_currentPosition], quantized to whole seconds while the
+  /// user isn't dragging.
+  ///
+  /// The painter wants every tick (that's the point of this widget), but the
+  /// invisible Slider underneath is a *gesture surface* — transparent track,
+  /// zero-draw thumb — and feeding it raw ticks rebuilt and re-laid-out a full
+  /// Material Slider on every video frame, 30-60x a second, for the whole
+  /// playback. It kept doing it with the controls hidden, too. Second
+  /// granularity keeps its value honest (semantics, and the thumb position it
+  /// seeds a drag from) at 1/60th the cost.
+  late final ValueNotifier<double> _sliderPosition;
+
   late final AnimationController _toggleController;
   late final Animation<double> _toggleAnimation;
 
@@ -89,6 +101,8 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     super.initState();
     _lastState = widget.positionListenable.value;
     _currentPosition = ValueNotifier(_displayPositionMs(_lastState));
+    _sliderPosition = ValueNotifier(_currentPosition.value);
+    _currentPosition.addListener(_syncSliderPosition);
     _hoverX = ValueNotifier(null);
     _isHovering = ValueNotifier(false);
     widget.positionListenable.addListener(_onPositionChanged);
@@ -156,7 +170,9 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     widget.positionListenable.removeListener(_onPositionChanged);
     _toggleController.dispose();
     _hoverController.dispose();
+    _currentPosition.removeListener(_syncSliderPosition);
     _currentPosition.dispose();
+    _sliderPosition.dispose();
     _hoverX.dispose();
     _isHovering.dispose();
     super.dispose();
@@ -225,6 +241,14 @@ class _VideoProgressBarState extends State<VideoProgressBar>
     } else {
       _currentPosition.value = newPos;
     }
+  }
+
+  /// Exact while dragging (the Slider must track the finger), floored to the
+  /// second otherwise.
+  void _syncSliderPosition() {
+    final v = _currentPosition.value;
+    final next = _isDragging ? v : (v / 1000).floorToDouble() * 1000;
+    if (next != _sliderPosition.value) _sliderPosition.value = next;
   }
 
   void _handleSliderChanged(double value) {
@@ -336,7 +360,7 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                           overlayColor: Colors.transparent,
                         ),
                         child: ValueListenableBuilder<double>(
-                          valueListenable: _currentPosition,
+                          valueListenable: _sliderPosition,
                           builder: (context, currentPos, _) {
                             return Slider(
                               padding: EdgeInsets.zero,

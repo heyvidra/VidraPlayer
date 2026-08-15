@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:vidra_player/ui/widget/blur.dart';
 import 'package:vidra_player/ui/widget/animation_button.dart';
-import 'package:vidra_player/utils/no_scrollbar_behavior.dart';
 
 import '../../utils/screen.dart';
 import '../../core/model/player_ui_theme.dart';
@@ -286,7 +285,9 @@ class PlayerMenuPanel extends StatelessWidget {
           // Menu items
           Flexible(
             child: ScrollConfiguration(
-              behavior: NoScrollbarBehavior(),
+              behavior: ScrollConfiguration.of(
+                  context,
+                ).copyWith(scrollbars: false),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Column(
