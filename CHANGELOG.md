@@ -1,3 +1,23 @@
+## 1.7.0
+
+### Changed
+
+- **A LOCAL playlist no longer waits for its duration to settle.** The
+  stability poll exists for a network playlist that may still be gaining
+  segments; a file on disk is complete the moment it parses, so polling it
+  learned nothing and cost a full second of pre-roll on every play. Measured
+  open-to-playing on one host: 1.89s before, 0.96s after. A live stream is
+  always a network source, so it cannot reach this path — and this is no
+  longer an edge case, because a host whose CDN signs every segment has to
+  hand the player a rewritten playlist from disk.
+
+### Fixed
+
+- **The HLS stability log named the wrong target.** It printed the streak
+  against the six samples a short stream needs while the gate in force was the
+  fast path's two, so every long VOD appeared to wait three times as long as
+  it did — and a wait that reads as three seconds gets budgeted for as three.
+
 ## 1.6.0
 
 ### Added

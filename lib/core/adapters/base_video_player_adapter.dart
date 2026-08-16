@@ -473,7 +473,16 @@ abstract class BaseVideoPlayerAdapter
     required Duration Function() getCurrentDuration,
     int? Function()? getCurrentWidth,
   }) async {
-    if (!isM3u8(source.path)) {
+    // A LOCAL playlist takes the plain path, even though its name ends .m3u8.
+    // The stability poll exists for a network playlist that may still be
+    // gaining segments; a file on disk is complete the moment it parses, so
+    // polling it learns nothing and costs a full second of pre-roll on every
+    // play. A live stream is always a network source, so this cannot reach one.
+    //
+    // Not merely an optimisation for downloaded media: a host whose CDN signs
+    // every segment has to hand the player a rewritten playlist from disk, and
+    // that is now the common case rather than the exception.
+    if (source.type != VideoSourceType.network || !isM3u8(source.path)) {
       await _waitFirstValidDuration(
         timeout: const Duration(seconds: 10),
         token: token,
@@ -705,13 +714,17 @@ abstract class BaseVideoPlayerAdapter
       final current = getCurrentDuration();
       if (current == lastSeen) {
         stableStreak++;
-        logger.d(
-          '[BaseVideoPlayerAdapter] HLS Phase 2: stable '
-          '$stableStreak/$_kStableRequired (${current.inSeconds}s)',
-        );
+        // Resolved BEFORE the log line, and logged: printing the streak
+        // against _kStableRequired while the gate was the fast path's 2 made
+        // every long VOD look like it waited three times as long as it did,
+        // and a wait that reads as three seconds gets budgeted for as three.
         final required = current >= _kFastPathMinDuration
             ? _kFastPathStableRequired
             : _kStableRequired;
+        logger.d(
+          '[BaseVideoPlayerAdapter] HLS Phase 2: stable '
+          '$stableStreak/$required (${current.inSeconds}s)',
+        );
         if (stableStreak >= required) {
           logger.d(
             '[BaseVideoPlayerAdapter] HLS Phase 2 done: '
