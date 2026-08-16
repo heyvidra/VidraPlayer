@@ -141,7 +141,11 @@ class MediaManager with LifecycleTokenProvider {
     required int durationMillis,
   }) async {
     final token = lifecycleToken;
-    if (!token.isAlive || durationMillis <= 0) return;
+    // video is what the write is KEYED by. Every caller happens to check it
+    // today, which is exactly why the `!` below survived — one refactor away
+    // from a null-bang crash on the position tick, ten times a second.
+    final video = _state.video;
+    if (!token.isAlive || video == null || durationMillis <= 0) return;
 
     _saveProgressThrottle.call(() async {
       if (!token.isAlive) return;
@@ -152,7 +156,7 @@ class MediaManager with LifecycleTokenProvider {
         durationMillis: durationMillis,
       );
 
-      await _repository.saveEpisodeHistory(_state.video!.id, history);
+      await _repository.saveEpisodeHistory(video.id, history);
 
       if (!token.isAlive) return;
 
@@ -176,7 +180,8 @@ class MediaManager with LifecycleTokenProvider {
     required int durationMillis,
   }) async {
     final token = lifecycleToken;
-    if (!token.isAlive || durationMillis <= 0) return;
+    final video = _state.video;
+    if (!token.isAlive || video == null || durationMillis <= 0) return;
 
     final history = EpisodeHistory(
       index: episodeIndex,
@@ -184,7 +189,7 @@ class MediaManager with LifecycleTokenProvider {
       durationMillis: durationMillis,
     );
 
-    await _repository.saveEpisodeHistory(_state.video!.id, history);
+    await _repository.saveEpisodeHistory(video.id, history);
   }
 
   Future<List<EpisodeHistory>> getAllHistories() async {
@@ -211,30 +216,6 @@ class MediaManager with LifecycleTokenProvider {
     return null;
   }
 
-  /// @deprecated Use getEpisodeHistory and handle logic in delegate
-  Future<EpisodeHistory?> shouldRestore(int episodeIndex) async {
-    logger.d(
-      "[HistoryManager] Checking restore for: ${_state.episodes[episodeIndex].title}",
-    );
-    final history = await getEpisodeHistory(episodeIndex);
-
-    if (history == null) return null;
-
-    final canRestore =
-        history.positionMillis > 30000 &&
-        history.positionMillis < (history.durationMillis * 0.95);
-
-    logger.d(
-      "[HistoryManager] History found: ${history.positionMillis}ms. Can restore: $canRestore",
-    );
-
-    if (canRestore) {
-      return history;
-    }
-
-    return null;
-  }
-
   // ===============================================================
   // Player Configuration/Settings (Auto-Skip, etc.)
   // ===============================================================
@@ -244,58 +225,74 @@ class MediaManager with LifecycleTokenProvider {
         PlayerSetting(videoId: _state.video?.id ?? 'unknown');
   }
 
+  /// Apply [setting] now, persist it after.
+  ///
+  /// The emission used to wait for the repository write to come back, while
+  /// the three callers below mutated `_state` synchronously and emitted
+  /// nothing — so `media.playerSetting` was already the new value but no
+  /// listener had been told. A skip toggle therefore moved only once storage
+  /// answered, which on a slow host repository reads as a switch that ignores
+  /// the first tap. Optimistic, like play()/pause() in PlaybackManager.
+  ///
+  /// No rollback on a failed write: [Latest] swallows the error and the UI
+  /// keeps the value the user chose. That is what the old code did too (it
+  /// left `_state` mutated and simply never emitted), minus the silence.
+  /// Bumped by every local settings write. [getPlayerSettings] compares it
+  /// across its await to tell "nothing happened" from "the user changed this
+  /// while I was reading" — see there.
+  int _settingWrites = 0;
+
   void updateSetting(PlayerSetting setting) {
     final token = lifecycleToken;
     if (!token.isAlive) return;
 
+    _settingWrites++;
+    _state = _state.copyWith(playerSetting: setting);
+    safeEmit(_mediaCtrl, _state, token);
+
     _saveSettingLatest.run(() async {
       if (!token.isAlive) return;
       await _repository.savePlayerSettings(setting);
-      if (!token.isAlive) return;
-
-      _state = _state.copyWith(playerSetting: setting);
-      safeEmit(_mediaCtrl, _state, token);
     });
   }
 
   Future<void> updateAutoSkip(bool autoSkip) async {
     if (_isDisposed) return;
-    final playerSetting = _currentOrDefaultSetting().copyWith(
-      autoSkip: autoSkip,
-    );
-    _state = _state.copyWith(playerSetting: playerSetting);
-    updateSetting(playerSetting);
+    updateSetting(_currentOrDefaultSetting().copyWith(autoSkip: autoSkip));
   }
 
   Future<void> updateSkipIntro(int skipIntro) async {
     if (_isDisposed) return;
-    final playerSetting = _currentOrDefaultSetting().copyWith(
-      skipIntro: skipIntro,
-    );
-    _state = _state.copyWith(playerSetting: playerSetting);
-    updateSetting(playerSetting);
+    updateSetting(_currentOrDefaultSetting().copyWith(skipIntro: skipIntro));
   }
 
   Future<void> updateSkipOutro(int skipOutro) async {
     if (_isDisposed) return;
-    final playerSetting = _currentOrDefaultSetting().copyWith(
-      skipOutro: skipOutro,
-    );
-    _state = _state.copyWith(playerSetting: playerSetting);
-    updateSetting(playerSetting);
+    updateSetting(_currentOrDefaultSetting().copyWith(skipOutro: skipOutro));
   }
 
   Future<PlayerSetting> getPlayerSettings() async {
     final token = lifecycleToken;
-    if (!token.isAlive || _state.video == null) {
+    final video = _state.video;
+    if (!token.isAlive || video == null) {
       return PlayerSetting(videoId: 'unknown');
     }
 
-    final setting = await _repository.getPlayerSettings(
-      videoId: _state.video!.id,
-    );
+    // A load started at initialize() and a user toggling auto-skip a moment
+    // later are concurrent writers of the same field, and this one is reading
+    // what was on disk BEFORE the toggle. Whichever finishes last used to win:
+    // the old code happened to apply its write after the repository round
+    // trip, so it usually landed second and the bug stayed invisible. Making
+    // the write optimistic put it first and the stale load overwrote the
+    // user's choice every time — same race, now deterministic.
+    final writesBefore = _settingWrites;
+    final setting = await _repository.getPlayerSettings(videoId: video.id);
 
     if (!token.isAlive) return setting;
+    // Someone chose something while this read was in flight. It wins; this
+    // value is by definition older. Still returned to the caller, which only
+    // ever uses it as a starting point.
+    if (_settingWrites != writesBefore) return setting;
 
     _state = _state.copyWith(playerSetting: setting);
     safeEmit(_mediaCtrl, _state, token);

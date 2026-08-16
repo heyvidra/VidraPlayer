@@ -416,6 +416,12 @@ class PlaybackManager with LifecycleTokenProvider {
       _player.bufferingStream.listen((state) {
         final token = lifecycleToken;
         if (!token.isAlive) return;
+        // Tick-driven adapters re-report the same state at poll rate (fvp:
+        // ~10/s, a fresh BufferingState each time). Drop the no-ops here so
+        // they don't reach the indicator's StreamBuilder. Safe to add because
+        // nothing pre-assigns _bufferingState and then emits it — the trap
+        // that made the identical guard on _emitPositionState swallow seeks.
+        if (state == _bufferingState) return;
         _bufferingState = state;
         safeEmit(_bufferingCtrl, _bufferingState, token);
       }),

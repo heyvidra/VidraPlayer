@@ -313,6 +313,39 @@ void main() {
             'retry budget is 3 — an un-sweepable source must not burn '
             'bandwidth forever against the video being watched',
       );
+      // And it must read as SETTLED, not as "still needs sweeping". The
+      // controller picks its next target by asking covers(): an exhausted
+      // episode that answers false is returned as the target on every
+      // position tick forever, startSweep declines it every time, and the
+      // neighbour sweep — the whole reason cross-episode detection has a
+      // pair to compare — never starts. Silently, with nothing in the log.
+      expect(service.covers(0), isTrue);
+      service.dispose();
+    });
+
+    test('an exhausted episode lets the NEXT one through', () async {
+      final sweepers = <FakeSweeper>[];
+      final service = SpriteSweepService(
+        createSweeper: () {
+          final s = FakeSweeper();
+          sweepers.add(s);
+          return s;
+        },
+      );
+      for (var attempt = 0; attempt < 3; attempt++) {
+        service.startSweep(episodeIndex: 0, url: 'u0');
+        await _settle();
+        sweepers.last.fail(StateError('dead source'));
+        await _settle();
+      }
+      expect(sweepers, hasLength(3));
+
+      // The neighbour is a different source and must still be sweepable —
+      // one dead episode cannot take the feature down with it.
+      service.startSweep(episodeIndex: 1, url: 'u1');
+      await _settle();
+      expect(sweepers, hasLength(4));
+      expect(service.covers(1), isTrue);
       service.dispose();
     });
 
@@ -502,6 +535,54 @@ void main() {
       service.clear();
       expect(service.hashedTiles(0), isEmpty);
       expect(service.lookup(0, 10), isNull);
+      service.dispose();
+    });
+
+    test('tile cache stays bounded while hashes survive', () async {
+      // ~2MB of PNG per swept episode with nothing evicting it: an evening of
+      // browsing a long season piled up tens of MB that only the episode on
+      // screen would ever be asked about. Hashes are the opposite case —
+      // ~4KB each and the sole input to cross-episode detection, so evicting
+      // them would delete the comparison partner the feature runs on.
+      final sweepers = <FakeSweeper>[];
+      final service = SpriteSweepService(
+        createSweeper: () {
+          final s = FakeSweeper();
+          sweepers.add(s);
+          return s;
+        },
+      );
+
+      // Walk a season: sweep episodes 0..7, one hashable tile each.
+      for (var episode = 0; episode < 8; episode++) {
+        service.startSweep(episodeIndex: episode, url: 'u$episode');
+        await _settle();
+        sweepers.last.emitHashableFrame(10);
+        await _settle();
+        await sweepers.last.done();
+        await _settle();
+      }
+
+      // Tiles: only a window around the last episode survives.
+      final withTiles = [
+        for (var e = 0; e < 8; e++)
+          if (service.lookup(e, 10) != null) e,
+      ];
+      expect(
+        withTiles,
+        hasLength(lessThanOrEqualTo(5)),
+        reason: 'an unbounded tile cache is what this exists to stop',
+      );
+      expect(
+        withTiles,
+        contains(7),
+        reason: 'the episode just swept must keep its tiles',
+      );
+
+      // Hashes: every episode still has them, and each is still a candidate
+      // partner for detection.
+      expect(service.episodesWithHashes(minTiles: 1), hasLength(8));
+      expect(service.hashedTiles(0), hasLength(1));
       service.dispose();
     });
 

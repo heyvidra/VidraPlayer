@@ -37,6 +37,18 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
   // instead of on every tick while value.isCompleted stays true.
   bool _wasCompleted = false;
 
+  // Same edge-detection for the three other tick-read values. All of them are
+  // per-load facts, not per-tick ones, so re-announcing them ten times a second
+  // is pure fan-out for no information.
+  //
+  // These MUST be reset in onReset(): a stale edge means a real transition
+  // after a switch is read as "no change" and never emitted at all. That is
+  // the standard failure of edge detection, and it is why they live beside
+  // _wasCompleted rather than somewhere more convenient.
+  bool _wasPlaying = false;
+  bool _wasBuffering = false;
+  bool _wasLive = false;
+
   // ── onInitialize ────────────────────────────────────────────────────────────
 
   @override
@@ -48,6 +60,12 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
 
     // Reset all stream states so the UI shows a clean slate immediately.
     resetAllStreams();
+    // That clean slate includes isBuffering:TRUE (the load spinner). Mirror it
+    // into the edge detector, or the first tick reads `false == _wasBuffering`
+    // as "no change" and this path never takes the spinner back down. Today
+    // the finally-block below also emits false so it would survive; relying on
+    // that is the kind of alignment that breaks the next time someone moves it.
+    _wasBuffering = true;
 
     final errorCtrl = StreamController<String>.broadcast();
 
@@ -166,9 +184,15 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
   }
 
   // ── Tick listener ──────────────────────────────────────────────────────────
-  // Called on every frame by VideoPlayerController's ChangeNotifier.
-  // Uses the emit* helpers from BaseVideoPlayerAdapter; each helper reads
-  // lifecycleToken at call-time and guards against closed controllers.
+  // Driven by VideoPlayerController's ChangeNotifier: a 100ms position timer
+  // while playing, plus whatever native events land in between — call it ~10Hz,
+  // NOT the video frame rate. (It said "every frame" here for a long time, and
+  // that overstated this path's cost by roughly six times to anyone reading it.)
+  //
+  // Still hot enough that every emit below wants a reason to exist: at 10/s,
+  // a value that changes once per load must not be re-announced 36,000 times
+  // an hour. Uses the emit* helpers from BaseVideoPlayerAdapter; each helper
+  // reads lifecycleToken at call-time and guards against closed controllers.
 
   void _onTick() {
     // Fast-path: if the lifecycle is dead, do nothing.
@@ -179,10 +203,26 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
 
     final value = ctrl.value;
 
+    // Position is the one value that genuinely differs every tick.
     emitPosition(value.position);
-    emitPlaying(value.isPlaying);
-    emitBuffering(BufferingState(isBuffering: value.isBuffering));
-    emitLive(isStreamLive(currentSource, value.duration));
+
+    // The rest change once per load, or a handful of times per session. Emit
+    // on the edge only — the same reason the buffered ranges below are cached.
+    // Downstream guards exist too, but they run after the allocation and the
+    // fan-out, which is the part worth not doing 10 times a second.
+    if (value.isPlaying != _wasPlaying) {
+      _wasPlaying = value.isPlaying;
+      emitPlaying(_wasPlaying);
+    }
+    if (value.isBuffering != _wasBuffering) {
+      _wasBuffering = value.isBuffering;
+      emitBuffering(BufferingState(isBuffering: _wasBuffering));
+    }
+    final live = isStreamLive(currentSource, value.duration);
+    if (live != _wasLive) {
+      _wasLive = live;
+      emitLive(live);
+    }
 
     // Real end-of-media signal (video_player >= 2.9 sets isCompleted at EOF).
     if (value.isCompleted != _wasCompleted) {
@@ -240,6 +280,9 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
     _cachedBufferedRanges = [];
     _errorEmitted = false;
     _wasCompleted = false;
+    _wasPlaying = false;
+    _wasBuffering = false;
+    _wasLive = false;
 
     if (ctrl == null) return;
     try {

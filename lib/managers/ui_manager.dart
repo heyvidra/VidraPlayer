@@ -122,6 +122,13 @@ class UIStateManager {
     if (duration > Duration.zero) {
       _autoHideTimer = Timer(duration, () {
         if (_isDisposed ||
+            // An open menu hangs off the control bar. Hiding the bar under it
+            // strands a floating menu whose CompositedTransformFollower has
+            // lost its leader — the shipped bug this counter was added for.
+            // _resetAutoHideTimer refuses to arm for the same reason; this
+            // path arms its own timer and so has to repeat the check, or the
+            // invariant holds everywhere except here.
+            _openMenuCount > 0 ||
             _visibility.showEpisodeList ||
             _visibility.showResumeDialog ||
             _visibility.showReplayDialog ||
@@ -860,9 +867,11 @@ class UIStateManager {
       return;
     }
 
-    // Every re-arm path (mouse move, updatePlaybackState backstop,
-    // _evaluateVisibility) funnels through here, so this single guard keeps
-    // the timer disarmed for the whole menu-open window.
+    // The invariant: the control bar never auto-hides while a menu hangs off
+    // it. Most re-arm paths (mouse move, updatePlaybackState backstop,
+    // _evaluateVisibility) funnel through here and this guard covers them.
+    // showControlsForced arms its own timer and repeats the check there —
+    // when adding a third arming site, do one or the other.
     if (_openMenuCount > 0) {
       return;
     }

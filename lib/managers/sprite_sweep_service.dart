@@ -125,8 +125,19 @@ class SpriteSweepService {
   /// master-resolution step before the sweeper stream exists.
   bool get isSweeping => _sub != null || _sweepingEpisode != null;
 
-  /// Whether [episodeIndex] already has tiles or a sweep in flight.
-  bool covers(int episodeIndex) => _sweptOrSweeping.contains(episodeIndex);
+  /// Whether [episodeIndex] is settled as far as sweeping goes — tiles stored,
+  /// a sweep in flight, or the retry budget spent.
+  ///
+  /// The exhausted-budget arm is load-bearing, not tidiness. A failed sweep
+  /// drops out of [_sweptOrSweeping] so it can retry, but once [_maxAttempts]
+  /// is reached [startSweep] silently declines forever — and the caller picks
+  /// its target by asking THIS method. Without the arm, `_nextSweepTarget`
+  /// keeps answering "the current episode" on every position tick, never
+  /// advances to the neighbour, and cross-episode detection (which needs a
+  /// PAIR) is dead for the rest of the session with nothing in the log.
+  bool covers(int episodeIndex) =>
+      _sweptOrSweeping.contains(episodeIndex) ||
+      (_failures[episodeIndex] ?? 0) >= _maxAttempts;
 
   /// Nearest tile to [seconds] for [episodeIndex], or null when the nearest
   /// one is more than one interval away (serving a frame from 30s away reads
@@ -447,6 +458,39 @@ class SpriteSweepService {
     }
   }
 
+  /// How many episodes' worth of TILES to keep. Around 2MB of PNG per swept
+  /// episode, so an evening of browsing a long season accumulated tens of MB
+  /// that nothing would ever look at again — the preview only ever asks about
+  /// the episode on screen.
+  ///
+  /// Only the tiles are capped. HASHES stay: they are ~4KB per episode and
+  /// they are the whole input to cross-episode detection, so evicting them
+  /// would quietly delete the comparison partner the feature is built on.
+  static const _maxTileEpisodes = 5;
+
+  /// Drop the tiles of whichever cached episode is furthest from [keep].
+  /// Distance, not insertion order: the user moves both directions through a
+  /// season, and an LRU would evict the previous episode they are about to
+  /// step back into.
+  void _evictTilesAround(int keep) {
+    while (_tiles.length > _maxTileEpisodes) {
+      var furthest = keep;
+      var bestDistance = -1;
+      for (final index in _tiles.keys) {
+        final distance = (index - keep).abs();
+        if (distance > bestDistance) {
+          bestDistance = distance;
+          furthest = index;
+        }
+      }
+      if (bestDistance <= 0) return; // only `keep` left — nothing to drop
+      _tiles.remove(furthest);
+      // Not _sweptOrSweeping: that set is what stops a re-sweep, and an
+      // episode whose tiles were evicted for being far away must not start
+      // decoding again the moment the user scrolls past it.
+    }
+  }
+
   /// Decode once, keep both products: the bytes the preview displays and the
   /// hash detection compares.
   Future<void> _store(int episodeIndex, SweptFrame frame) async {
@@ -484,6 +528,7 @@ class SpriteSweepService {
       if (_isDisposed || displayBytes == null) return;
       final second = frame.position.inSeconds;
       _tiles.putIfAbsent(episodeIndex, SplayTreeMap.new)[second] = displayBytes;
+      _evictTilesAround(episodeIndex);
       if (hash != 0) {
         _hashes.putIfAbsent(episodeIndex, SplayTreeMap.new)[second] = hash;
       }

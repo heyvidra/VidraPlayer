@@ -8,6 +8,7 @@ import '../lifecycle/safe_stream.dart';
 import '../model/model.dart';
 import '../player_exceptions.dart';
 import '../state/states.dart';
+import '../../utils/log.dart';
 import '../../utils/network_resilience.dart';
 
 // ── Retry concurrency token ────────────────────────────────────────────────────
@@ -376,7 +377,7 @@ abstract class BaseVideoPlayerAdapter
       // called again (new scope) or dispose() runs, this check ends the loop.
       if (_isDisposed || !token.isAlive) return;
 
-      debugPrint(
+      logger.d(
         '[BaseVideoPlayerAdapter] openWithRetry attempt $attempt/$maxRetries',
       );
 
@@ -389,7 +390,7 @@ abstract class BaseVideoPlayerAdapter
       errorSub = errorStream.listen((error) {
         if (cancelToken.isCompleted) return;
         if (isFatalError(error)) {
-          debugPrint('[BaseVideoPlayerAdapter] Fatal error during open: $error');
+          logger.d('[BaseVideoPlayerAdapter] Fatal error during open: $error');
           cancelToken.complete(OpenResult.failure);
         }
       });
@@ -403,7 +404,7 @@ abstract class BaseVideoPlayerAdapter
         try {
           await open().timeout(openCallTimeout);
         } on TimeoutException {
-          debugPrint(
+          logger.d(
             '[BaseVideoPlayerAdapter] open() timed out on attempt $attempt',
           );
           if (!cancelToken.isCompleted) {
@@ -423,13 +424,13 @@ abstract class BaseVideoPlayerAdapter
         final result = await cancelToken.future;
 
         if (result == OpenResult.success) {
-          debugPrint(
+          logger.d(
             '[BaseVideoPlayerAdapter] openWithRetry succeeded on attempt $attempt',
           );
           return;
         }
 
-        debugPrint(
+        logger.d(
           '[BaseVideoPlayerAdapter] openWithRetry failed on attempt $attempt/$maxRetries',
         );
 
@@ -576,7 +577,7 @@ abstract class BaseVideoPlayerAdapter
         },
       );
     } catch (e) {
-      debugPrint('[BaseVideoPlayerAdapter] Warmup failed: $e');
+      logger.d('[BaseVideoPlayerAdapter] Warmup failed: $e');
       throw NetworkException(
         'Video source unavailable',
         url: Uri.tryParse(source.path),
@@ -657,7 +658,7 @@ abstract class BaseVideoPlayerAdapter
     while (getCurrentDuration() <= Duration.zero) {
       if (_isDisposed || !token.isAlive || cancelToken.isCompleted) return;
       if (DateTime.now().isAfter(phase1Deadline)) {
-        debugPrint(
+        logger.d(
           '[BaseVideoPlayerAdapter] HLS Phase 1 timeout: no duration received.',
         );
         if (!cancelToken.isCompleted) cancelToken.complete(OpenResult.failure);
@@ -668,7 +669,7 @@ abstract class BaseVideoPlayerAdapter
 
     if (_isDisposed || !token.isAlive || cancelToken.isCompleted) return;
 
-    debugPrint(
+    logger.d(
       '[BaseVideoPlayerAdapter] HLS Phase 1 done: '
       'initial duration = ${getCurrentDuration().inSeconds}s',
     );
@@ -681,7 +682,7 @@ abstract class BaseVideoPlayerAdapter
     while (true) {
       if (_isDisposed || !token.isAlive || cancelToken.isCompleted) return;
       if (DateTime.now().isAfter(phase2Deadline)) {
-        debugPrint(
+        logger.d(
           '[BaseVideoPlayerAdapter] HLS Phase 2 timeout: '
           'duration last seen = ${lastSeen.inSeconds}s',
         );
@@ -696,7 +697,7 @@ abstract class BaseVideoPlayerAdapter
       final current = getCurrentDuration();
       if (current == lastSeen) {
         stableStreak++;
-        debugPrint(
+        logger.d(
           '[BaseVideoPlayerAdapter] HLS Phase 2: stable '
           '$stableStreak/$_kStableRequired (${current.inSeconds}s)',
         );
@@ -704,7 +705,7 @@ abstract class BaseVideoPlayerAdapter
             ? _kFastPathStableRequired
             : _kStableRequired;
         if (stableStreak >= required) {
-          debugPrint(
+          logger.d(
             '[BaseVideoPlayerAdapter] HLS Phase 2 done: '
             'duration stable at ${current.inSeconds}s'
             '${required == _kFastPathStableRequired ? ' (fast path)' : ''}',
@@ -712,7 +713,7 @@ abstract class BaseVideoPlayerAdapter
           return;
         }
       } else {
-        debugPrint(
+        logger.d(
           '[BaseVideoPlayerAdapter] HLS Phase 2: duration changed '
           '${lastSeen.inSeconds}s → ${current.inSeconds}s, reset streak',
         );

@@ -2067,21 +2067,21 @@ class PlayerController {
   }
 
   /// Applies platform invariants that every config write path must enforce.
-  /// Currently: thumbnails are backed by a macOS-only native generator, so
-  /// force `enableThumbnail` off elsewhere. Centralized here so no write path
-  /// (constructor / [setEnableThumbnail] / [updateConfig]) can forget it.
-  static PlayerConfig _normalizeConfig(PlayerConfig c) {
-    // enableThumbnail used to be forced off away from macOS because the
-    // native generator was the only preview source. With a FrameSweeper
-    // registered, sprite previews work everywhere — forcing the flag off
-    // would kill the sweep on exactly the platforms it exists for.
-    if (!Platform.isMacOS &&
-        !VidraPlayer.hasFrameSweeper &&
-        c.behavior.enableThumbnail) {
-      return c.copyWith(behavior: c.behavior.copyWith(enableThumbnail: false));
-    }
-    return c;
-  }
+  ///
+  /// Nothing left to do here. The thumbnail gate used to live in this method
+  /// and it was a latch: it read [VidraPlayer.hasFrameSweeper] at the moment
+  /// the config was WRITTEN, and wrote `enableThumbnail: false` into the
+  /// stored config. A host that registered its sweeper factory after building
+  /// the controller — a perfectly ordinary order, and nothing said otherwise —
+  /// had the flag cleared for good, with no path that ever set it back and no
+  /// diagnostic anywhere. The gate now lives in the [enableThumbnail] getter,
+  /// where it is evaluated at READ time and cannot go stale.
+  ///
+  /// Kept as the seam it always was: the write paths (constructor /
+  /// [setEnableThumbnail] / [updateConfig]) still funnel through it, so the
+  /// next platform invariant has an obvious home — one that must be
+  /// order-independent to belong here.
+  static PlayerConfig _normalizeConfig(PlayerConfig c) => c;
 
   void setEnableThumbnail(bool enabled) {
     if (_isDisposed) return;
@@ -2114,8 +2114,17 @@ class PlayerController {
     _uiManager.refresh();
   }
 
+  /// Whether hover previews can actually produce a picture right now.
+  ///
+  /// The platform arm is evaluated here rather than baked into the config at
+  /// write time: previews come from either the macOS native generator or a
+  /// registered [FrameSweeper], and a host may register its sweeper factory
+  /// after constructing the controller. Reading the condition instead of
+  /// latching it makes that ordering stop mattering.
   bool get enableThumbnail {
-    return config.behavior.enableThumbnail && media.currentEpisode != null;
+    if (!config.behavior.enableThumbnail) return false;
+    if (media.currentEpisode == null) return false;
+    return Platform.isMacOS || VidraPlayer.hasFrameSweeper;
   }
 
   // Controller-owned thumbnail manager, keyed by media URL, so the LRU cache

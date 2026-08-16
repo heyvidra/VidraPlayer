@@ -112,9 +112,16 @@ class MdkFrameSweeper implements FrameSweeper {
       // One decision, both knobs. 16x decode saturates every core of a 2016
       // 4c/8t Intel MBP — pausing spun the fans up on a machine that looked
       // idle, then thermal throttling dragged the foreground down with it.
-      // <= 8 logical processors is that machine class: half the rate, and a
-      // pump half as eager. Anything wider keeps the measured 16x numbers.
-      final lowCore = Platform.numberOfProcessors <= 8;
+      // Half the rate on that machine class, and a pump half as eager.
+      // Anything wider keeps the measured 16x numbers.
+      //
+      // Core count ALONE misreads the fleet: every base-model Apple Silicon
+      // chip (M1/M2/M3/M4, 4P+4E) also reports 8, and those are the machines
+      // the feature was measured at 14.2x on. Counting them as the 2016 Intel
+      // MBP halved the sweep for most of the actual user base. The ABI is what
+      // separates the two — same count, different machine.
+      final lowCore =
+          Platform.numberOfProcessors <= 8 && Abi.current() != Abi.macosArm64;
       final rate = lowCore ? 8.0 : 16.0;
       p.playbackRate = rate;
       p.state = mdk.PlaybackState.playing;

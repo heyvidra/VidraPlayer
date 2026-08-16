@@ -66,6 +66,7 @@ class _FakePlayer implements IVideoPlayer {
 
   void emitPlaying(bool playing) => _playingCtrl.add(playing);
   void emitCompleted(bool completed) => _completedCtrl.add(completed);
+  void emitBuffering(BufferingState state) => _bufferingCtrl.add(state);
   void emitPosition(Duration pos) {
     _position = pos;
     _positionCtrl.add(pos);
@@ -328,6 +329,47 @@ void main() {
       await _pump();
       expect(notifications, greaterThan(afterFirst));
 
+      manager.dispose();
+      await player.dispose();
+    });
+  });
+
+  group('buffering emission', () {
+    test('identical re-reports are swallowed, real changes pass', () async {
+      // fvp's tick handler allocates a fresh BufferingState roughly ten times
+      // a second off video_player's 100ms position timer. Ungated, every one
+      // of them reached the indicator's StreamBuilder and rebuilt it — for the
+      // entire duration of playback, to draw the same nothing.
+      final player = _FakePlayer();
+      final manager = _buildManager(player);
+
+      final seen = <BufferingState>[];
+      final sub = manager.bufferingStream.listen(seen.add);
+
+      player.emitBuffering(const BufferingState(isBuffering: true));
+      player.emitBuffering(const BufferingState(isBuffering: true));
+      player.emitBuffering(const BufferingState(isBuffering: true));
+      await _pump();
+      expect(seen, hasLength(1), reason: 'a repeat is not news');
+
+      // A different message on the same flag IS news — the retry ladder
+      // reports its attempt count through exactly this field.
+      player.emitBuffering(
+        const BufferingState(
+          isBuffering: true,
+          messageKey: 'retrying_with_count',
+          messageArgs: {'attempt': '2', 'total': '3'},
+        ),
+      );
+      await _pump();
+      expect(seen, hasLength(2));
+
+      player.emitBuffering(const BufferingState(isBuffering: false));
+      await _pump();
+      expect(seen, hasLength(3));
+      expect(manager.bufferingState.isBuffering, isFalse);
+
+      await sub.cancel();
       manager.dispose();
       await player.dispose();
     });

@@ -1,3 +1,60 @@
+## 1.5.1
+
+### Fixed
+
+- **Cross-episode intro/outro detection could die silently for a whole
+  session.** `SpriteSweepService.covers()` reported only "tiles stored or a
+  sweep in flight", so an episode that spent its three retries dropped back out
+  of the in-flight set and read as un-covered forever. The scheduler picks its
+  next target by asking exactly that method, so it kept answering "the current
+  episode" on every position tick, `startSweep` declined every time, and the
+  neighbour sweep never began — and detection needs a *pair*. Nothing in the
+  log said so. An exhausted retry budget now counts as covered.
+- **A skip setting saved at startup could be overwritten by the load it raced.**
+  `getPlayerSettings()` and a user toggling auto-skip write the same field, and
+  the load carries what was on disk *before* the toggle; whichever finished last
+  won. The load now yields to any write that landed while it was in flight.
+- **Registering a `FrameSweeper` factory after building the controller
+  disabled thumbnails permanently.** The platform gate was evaluated when the
+  config was *written* and baked `enableThumbnail: false` into it, with no path
+  back and no diagnostic. It is read at use time now, so the ordering no longer
+  matters.
+- **Sprite tiles grew without bound.** ~2MB per swept episode, kept for the
+  session. Capped at five episodes, evicted by distance from the episode in
+  play rather than least-recently-used — viewers step backwards through a
+  season. Perceptual hashes are never evicted: they are ~4KB and they are
+  detection's only input.
+- **Skip settings waited for storage before they moved.** The switch is applied
+  optimistically now and persisted after, so slow host storage no longer reads
+  as a toggle that ignored the first tap.
+- `debugPrint` in the HLS open path is not compiled out of release builds; it
+  was spraying phase logs into host consoles. Swapped for the assert-gated
+  logger.
+
+### Performance
+
+- **Base-model Apple Silicon swept at half rate.** The low-core heuristic was
+  `numberOfProcessors <= 8`, and every base M-series chip (4P+4E) reports 8 —
+  the same as the 2016 4c/8t Intel MBP the throttle was written for, and the
+  same machines the sweep was measured at 14.2x on. The ABI separates them.
+- `BufferingState` had no value equality, and the fvp tick allocates a fresh
+  one roughly ten times a second, so the buffering stream fanned out at tick
+  rate for the whole of playback to draw the same nothing. `isPlaying`,
+  `isBuffering` and `isLive` are edge-detected in the adapter for the same
+  reason; the fvp adapter is now change-driven like media_kit.
+- The progress bar called `showControlsTemporarily` on every hover event —
+  over a hundred a second from a trackpad, each cancelling and re-allocating a
+  timer to reach a debounce that then did nothing, because the enclosing
+  `ControlHoverRegion` already pins the controls. Kept only as the recovery
+  path it earns.
+
+### Added
+
+- `tool/vmdrive.dart` — drives a running app through the Dart VM Service by
+  injecting pointer events into `GestureBinding` and locating targets by
+  walking the element tree. For hosts where OS-level click tooling cannot
+  reach inside a Flutter window.
+
 ## 1.5.0
 
 ### Changed

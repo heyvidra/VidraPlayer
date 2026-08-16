@@ -442,4 +442,37 @@ void main() {
 
     ui.dispose();
   });
+
+  test('showControlsForced refuses to arm auto-hide under an open menu', () {
+    // showControlsForced builds its own timer instead of going through
+    // _resetAutoHideTimer, so the _openMenuCount guard that every other
+    // re-arm path respects did not reach it. No production caller takes this
+    // route today — showMoreMenu cancels any live timer, and toggleControls
+    // only forces controls when they are hidden, which a menu prevents. This
+    // locks the invariant at the unit boundary so the next caller added to
+    // showControlsForced cannot quietly reopen the strand this counter was
+    // introduced to fix.
+    fakeAsync((async) {
+      final ui = UIStateManager(behavior: const PlayerBehavior());
+      ui.updatePlaybackState(isPlaying: true, isInitialized: true);
+
+      ui.showMoreMenu();
+      ui.showControlsForced(duration: const Duration(seconds: 5));
+      expect(ui.currentVisibility.showControls, isTrue);
+
+      async.elapse(const Duration(seconds: 6));
+      expect(
+        ui.currentVisibility.showControls,
+        isTrue,
+        reason: 'the bar must outlive the menu that hangs off it',
+      );
+
+      // Closing the menu hands auto-hide back.
+      ui.hideMoreMenu();
+      async.elapse(const Duration(seconds: 5));
+      expect(ui.currentVisibility.showControls, isFalse);
+
+      ui.dispose();
+    });
+  });
 }

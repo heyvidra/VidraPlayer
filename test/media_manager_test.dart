@@ -36,8 +36,14 @@ class FakeMediaRepository implements MediaRepository {
     _saveCompleter.complete();
   }
 
+  /// Held open to stand in for slow host storage; complete it to let the
+  /// write land.
+  Completer<void>? settingsGate;
+
   @override
   Future<void> savePlayerSettings(PlayerSetting setting) async {
+    final gate = settingsGate;
+    if (gate != null) await gate.future;
     savedSetting = setting;
   }
 }
@@ -187,5 +193,43 @@ void main() {
     expect(manager.state.playerSetting!.videoId, 'v1');
     expect(manager.state.playerSetting!.autoSkip, isFalse);
     expect(repository.savedSetting?.autoSkip, isFalse);
+  });
+
+  test('a skip setting is announced before storage answers', () async {
+    // The emission used to sit behind the repository write while _state was
+    // already mutated — so media.playerSetting held the new value and nobody
+    // had been told. On a slow host repository that reads as a switch that
+    // ignores the first tap.
+    final repository = FakeMediaRepository();
+    final manager = MediaManager(repository: repository);
+    manager.initialize(
+      video: const VideoMetadata(id: 'v1', title: 'V', coverUrl: 'c'),
+      episodes: const [VideoEpisode(index: 0, title: 'Ep 1')],
+    );
+
+    final emitted = <bool?>[];
+    final sub = manager.mediaStream.listen(
+      (s) => emitted.add(s.playerSetting?.autoSkip),
+    );
+
+    // Storage is wedged for the whole of this window.
+    repository.settingsGate = Completer<void>();
+    await manager.updateAutoSkip(false);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      emitted,
+      contains(false),
+      reason: 'the toggle must move on tap, not on fsync',
+    );
+    expect(repository.savedSetting, isNull, reason: 'write still in flight');
+
+    // And it still reaches storage once the gate opens.
+    repository.settingsGate!.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(repository.savedSetting?.autoSkip, isFalse);
+
+    await sub.cancel();
+    manager.dispose();
   });
 }

@@ -1,6 +1,8 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 
+import 'log.dart';
+
 class HlsNodeState {
   /// Clears both caches. Process-wide state that outlives a single playback
   /// session, so a test asserting probe order has to start from a known one.
@@ -73,7 +75,7 @@ class NetworkResilience {
     // Same host warmed up within the TTL: skip the whole probe. The value of
     // warmup is bad-node detection, and we already have a recent verdict.
     if (HlsNodeState.isWarm(host)) {
-      debugPrint('[HLS] host $host warmed recently, skipping preflight');
+      logger.d('[HLS] host $host warmed recently, skipping preflight');
       return WarmupResult('', originalUrl, host);
     }
 
@@ -81,7 +83,7 @@ class NetworkResilience {
     try {
       addresses = await InternetAddress.lookup(host);
     } catch (e) {
-      debugPrint('[HLS] DNS Resolution failed for $host: $e');
+      logger.d('[HLS] DNS Resolution failed for $host: $e');
       throw Exception('DNS Resolution failed');
     }
 
@@ -130,16 +132,16 @@ class NetworkResilience {
         onRetry: onRetry,
         isCancelled: isCancelled,
       )) {
-        debugPrint('[HLS] warmup successful for host=$host');
+        logger.d('[HLS] warmup successful for host=$host');
         HlsNodeState.markWarm(host);
         return WarmupResult('', originalUrl, host);
       }
-      debugPrint('[HLS] hostname warmup failed, falling back to per-IP pinning');
+      logger.d('[HLS] hostname warmup failed, falling back to per-IP pinning');
 
       for (final ip in ipsToTry) {
         if (isCancelled?.call() ?? false) throw Exception('Warmup cancelled');
         if (HlsNodeState.isBad(ip)) {
-           debugPrint('[HLS] IP $ip is marked as bad, prioritizing other nodes...');
+           logger.d('[HLS] IP $ip is marked as bad, prioritizing other nodes...');
         }
 
         final resolvedUri = uri.replace(host: ip);
@@ -153,13 +155,13 @@ class NetworkResilience {
           onRetry: onRetry,
           isCancelled: isCancelled,
         )) {
-          debugPrint('[HLS] warmup successful for ip=$ip');
+          logger.d('[HLS] warmup successful for ip=$ip');
           HlsNodeState.markWarm(host);
           return WarmupResult(ip, resolvedUri.toString(), host);
         }
 
         HlsNodeState.markBad(ip);
-        debugPrint('[HLS] All retries failed for IP $ip, marked as bad node. Switching to next IP...');
+        logger.d('[HLS] All retries failed for IP $ip, marked as bad node. Switching to next IP...');
       }
     } finally {
       // force: true so a cancelled warmup drops in-flight sockets immediately
@@ -190,7 +192,7 @@ class NetworkResilience {
     for (int attempt = 1; attempt <= maxRetries; attempt++) {
       if (isCancelled?.call() ?? false) throw Exception('Warmup cancelled');
       try {
-        debugPrint('[HLS] attempt=$attempt $label url=$probeUri warmup');
+        logger.d('[HLS] attempt=$attempt $label url=$probeUri warmup');
 
         final request = await client.getUrl(probeUri);
         request.headers.set('Host', host);
@@ -209,11 +211,11 @@ class NetworkResilience {
 
         // Handle fatal status codes (403, 401)
         if (response.statusCode == 403 || response.statusCode == 401) {
-          debugPrint('[HLS] Fatal status=${response.statusCode} - URL probably invalid or token expired. Aborting.');
+          logger.d('[HLS] Fatal status=${response.statusCode} - URL probably invalid or token expired. Aborting.');
           throw Exception('HTTP ${response.statusCode} forbidden');
         }
 
-        debugPrint('[HLS] attempt=$attempt $label status=${response.statusCode} -> retry');
+        logger.d('[HLS] attempt=$attempt $label status=${response.statusCode} -> retry');
         onRetry?.call(attempt, maxRetries);
         // No backoff after the final attempt — fail over to the next target
         // immediately instead of sleeping into markBad.
@@ -223,7 +225,7 @@ class NetworkResilience {
       } catch (e) {
         if (e is Exception && e.toString().contains('forbidden')) rethrow;
 
-        debugPrint('[HLS] attempt=$attempt $label error=$e -> retry');
+        logger.d('[HLS] attempt=$attempt $label error=$e -> retry');
         onRetry?.call(attempt, maxRetries);
         if (attempt < maxRetries) {
           await Future.delayed(Duration(seconds: attempt));

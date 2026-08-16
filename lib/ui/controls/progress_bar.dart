@@ -294,7 +294,21 @@ class _VideoProgressBarState extends State<VideoProgressBar>
       },
       onHover: (event) {
         _hoverX.value = event.localPosition.dx;
-        widget.controller?.showControlsTemporarily();
+        // Safety net, not the main path: onEnter above already pinned the
+        // controls, and the enclosing ControlHoverRegion keeps _resetAutoHide
+        // Timer from re-arming for as long as the pointer is inside. Calling
+        // showControlsTemporarily unconditionally meant a Timer cancelled and
+        // re-allocated on every hover event — 100+/second from a trackpad —
+        // to reach a debounce that then did nothing. That is the same churn
+        // handleMouseMove is throttled to 30Hz to avoid.
+        //
+        // Kept for the one case it earns: something else hid the controls
+        // while the pointer sat on the bar, and without this the user would
+        // have to leave and re-enter to get them back.
+        final controller = widget.controller;
+        if (controller != null && !controller.visibility.showControls) {
+          controller.showControlsTemporarily();
+        }
       },
       child: RepaintBoundary(
         child: SizedBox(
