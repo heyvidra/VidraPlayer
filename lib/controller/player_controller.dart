@@ -198,6 +198,7 @@ class PlayerController {
     required List<VideoEpisode> episodes,
     WindowDelegate? windowDelegate,
     MediaRepository? mediaRepository,
+    SourceResolver? sourceResolver,
   }) {
     return PlayerController._internal(
       config: config,
@@ -206,6 +207,7 @@ class PlayerController {
       episodes: episodes,
       windowDelegate: windowDelegate,
       mediaRepository: mediaRepository,
+      sourceResolver: sourceResolver,
     );
   }
 
@@ -227,7 +229,12 @@ class PlayerController {
     required List<VideoEpisode> episodes,
     WindowDelegate? windowDelegate,
     MediaRepository? mediaRepository,
-  }) : _playbackManager = PlaybackManager(config: config, player: player),
+    SourceResolver? sourceResolver,
+  }) : _playbackManager = PlaybackManager(
+         config: config,
+         player: player,
+         sourceResolver: sourceResolver,
+       ),
        _audioManager = AudioManager(player: player),
        _mediaManager = MediaManager(
          repository: mediaRepository ?? MemoryMediaRepository(),
@@ -345,6 +352,19 @@ class PlayerController {
   PlaybackLifecycleState get lifecycle => _playbackManager.lifecycleState;
   PlaybackPositionState get position => _playbackManager.positionState;
   MediaContextState get media => _mediaManager.state;
+
+  /// The source actually being played, which is NOT always the one media state
+  /// names.
+  ///
+  /// A host may store a placeholder per episode and mint the real url only
+  /// when playback starts (see [SourceResolver]). Media state keeps the
+  /// placeholder — it is the catalog's truth and what a quality switch keys on
+  /// — so anything that goes and FETCHES the media (thumbnails, the sprite
+  /// sweep, a chapter probe) has to ask here instead. Falls back to media
+  /// state, which is correct for every host that needs no resolving, and is
+  /// null between the start of an open and its success.
+  VideoSource? get playingSource =>
+      _playbackManager.openedSource ?? _mediaManager.state.currentSource;
   AudioState get audio => _audioManager.state;
   ViewModeState get view => _uiManager.currentViewMode;
   BufferingState get buffering => _playbackManager.bufferingState;
@@ -831,8 +851,16 @@ class PlayerController {
     // this, so don't spend a request re-deriving it.
     if (_mediaManager.state.episodeMarkers.containsKey(index)) return;
 
-    final url = _mediaManager.state.currentSource?.path;
+    // The resolved url when there is one. This probe deliberately runs in
+    // PARALLEL with the open, so on a host that resolves lazily it can get
+    // here first and see the placeholder — which is unfetchable, and probing
+    // it would spend a request to learn nothing.
+    final url = playingSource?.path;
     if (url == null) return;
+    final scheme = Uri.tryParse(url)?.scheme.toLowerCase();
+    if (scheme != 'http' && scheme != 'https' && scheme != 'file' && scheme != '') {
+      return;
+    }
 
     final markers = await probeChapters(url, index);
     if (markers == null || _isDisposed) return;
@@ -1697,7 +1725,14 @@ class PlayerController {
       media.episodes[target].qualities,
     );
     if (quality == null) return;
-    service.startSweep(episodeIndex: target, url: quality.source.path);
+    // The sweep only ever targets the episode being PLAYED, so the resolved
+    // url is the right one — and on a host that mints urls per playback it is
+    // the only one that opens at all. Sweeps run from stable playback, well
+    // after the open that sets it.
+    final url = target == media.currentEpisodeIndex
+        ? (playingSource?.path ?? quality.source.path)
+        : quality.source.path;
+    service.startSweep(episodeIndex: target, url: url);
   }
 
   /// The episode a sweep should cover next, or null when everything worth

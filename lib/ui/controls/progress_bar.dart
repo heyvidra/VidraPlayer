@@ -656,14 +656,20 @@ class _VideoProgressBarState extends State<VideoProgressBar>
                           bottom: tooltipBottom + bubbleHeight + 5,
                           child: ThumbnailPreview(
                             controller: widget.controller!,
-                            url: widget
-                                .controller!
-                                .media
-                                .currentEpisode!
-                                .qualities
-                                .first
-                                .source
-                                .path,
+                            // The url actually PLAYING, not the one the catalog
+                            // stored: a host that mints its urls per playback
+                            // keeps a placeholder in media state, and a
+                            // generator handed one produces no frames at all.
+                            url:
+                                widget.controller!.playingSource?.path ??
+                                widget
+                                    .controller!
+                                    .media
+                                    .currentEpisode!
+                                    .qualities
+                                    .first
+                                    .source
+                                    .path,
                             // Quantize to whole seconds: the thumbnail cache is
                             // second-keyed anyway, and per-pixel fractional
                             // values would re-trigger a load on every hover

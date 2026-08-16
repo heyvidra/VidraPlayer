@@ -497,9 +497,17 @@ abstract class BaseVideoPlayerAdapter
   }
 
   /// Extracts standard HTTP headers for anti-hotlinking evasion.
+  ///
+  /// A source carrying its own [VideoSource.headers] REPLACES this set rather
+  /// than adding to it. The self-referer below is a guess that suits the
+  /// common anti-hotlinking shape and is fatal on CDNs that answer 520 to a
+  /// request referring to their own host, so a caller that knows what its CDN
+  /// expects has to be able to say so without inheriting the guess.
   @protected
   Map<String, String>? getHttpProxyHeaders(VideoSource source) {
     if (source.type != VideoSourceType.network) return null;
+    final explicit = source.headers;
+    if (explicit != null) return explicit;
     final uri = Uri.tryParse(source.path);
     if (uri == null) return null;
     return {

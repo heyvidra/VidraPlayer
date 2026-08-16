@@ -1,3 +1,30 @@
+## 1.6.0
+
+### Added
+
+- **A host can now mint its stream URL at the moment playback starts.**
+  `PlayerController(sourceResolver: ...)` runs inside
+  `PlaybackManager.initialize`, which is the one place every path that opens
+  media funnels through — first load, episode switch, quality switch, retry —
+  so none of them can end up opening a placeholder. Written for a catalog whose
+  URLs are signed per playback behind a rate limiter that answers a
+  whole-show resolve with a bot challenge; resolving each episode as it is
+  played is the only shape that host permits. Returning null means "no playable
+  source" and is reported as a load error, as is throwing.
+- **`VideoSource.headers`, which REPLACES the adapter's guess rather than
+  adding to it.** `getHttpProxyHeaders` sends a browser User-Agent plus a
+  Referer naming the stream's own host, which is what most anti-hotlinking CDNs
+  want. It is not universal: one measured CDN answers 520 to exactly that
+  Referer and 200 to a plain User-Agent. A caller that knows what its CDN
+  expects has to be able to say so without inheriting the guess.
+- **`PlayerController.playingSource` — what is actually being played.** Media
+  state holds what the catalog stored, which for a host resolving lazily is a
+  placeholder nothing can fetch. Thumbnails, the sprite sweep and the chapter
+  probe were all being handed it, so on such a host they spent their requests
+  on a URL only the playback path ever turned into something real. It goes
+  stale at the start of every open, so a reader mid-switch cannot be given the
+  previous episode's URL.
+
 ## 1.5.1
 
 ### Fixed

@@ -54,6 +54,7 @@ export 'core/interfaces/frame_sweeper.dart'
 
 // Core Controller
 export 'controller/player_controller.dart' show PlayerController;
+export 'managers/playback_manager.dart' show SourceResolver;
 
 // Main Widget
 export 'ui/player_widget.dart' show VideoPlayerWidget;

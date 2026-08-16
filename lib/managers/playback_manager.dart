@@ -10,6 +10,19 @@ import '../core/player_exceptions.dart';
 import '../core/state/states.dart';
 import '../utils/log.dart';
 
+/// Turns the source held in media state into the one actually opened.
+///
+/// For most hosts the stored URL IS the stream and no resolver is needed. Some
+/// mint a short-lived, signed URL per playback and rate-limit the endpoint that
+/// mints it — resolving a whole show up front there costs one request per
+/// episode and trips the host's bot challenge, so those hosts store a
+/// placeholder per episode and hand it over here, one request at the moment
+/// playback actually starts.
+///
+/// Returning null means "no playable source"; throwing is equivalent and is
+/// reported as a load error.
+typedef SourceResolver = Future<VideoSource?> Function(VideoSource source);
+
 /// Manages playback state and coordinates with the underlying video player.
 ///
 /// This is an internal implementation class. SDK users should interact
@@ -21,6 +34,17 @@ class PlaybackManager with LifecycleTokenProvider {
 
   PlayerConfig _config;
   final IVideoPlayer _player;
+  final SourceResolver? _sourceResolver;
+
+  /// What was actually opened, after any [SourceResolver] ran.
+  ///
+  /// Media state holds what the CATALOG stored, which for a host that mints
+  /// its urls per playback is a placeholder nothing can fetch. Anything else
+  /// pointed at the same media — thumbnails, the sprite sweep, a chapter probe
+  /// — has to be given this instead, or it spends its requests on a url only
+  /// this class ever turned into something real.
+  VideoSource? get openedSource => _openedSource;
+  VideoSource? _openedSource;
 
   /// Force-clears a stuck isSeeking flag if the player never ticks close
   /// enough to the target (keyframe-sparse HLS seeks can land far away).
@@ -59,9 +83,13 @@ class PlaybackManager with LifecycleTokenProvider {
   // Construction
   // ===============================================================
 
-  PlaybackManager({required PlayerConfig config, required IVideoPlayer player})
-    : _config = config,
-      _player = player {
+  PlaybackManager({
+    required PlayerConfig config,
+    required IVideoPlayer player,
+    SourceResolver? sourceResolver,
+  }) : _config = config,
+       _player = player,
+       _sourceResolver = sourceResolver {
     positionNotifier = ValueNotifier<PlaybackPositionState>(_positionState);
     isLiveNotifier = ValueNotifier<bool>(_positionState.isLive);
     _bindPlayerStreams();
@@ -94,6 +122,11 @@ class PlaybackManager with LifecycleTokenProvider {
   /// committing new media/quality state or driving seek/play would diverge the
   /// UI from reality. [source] is resolved by the single authority
   /// (MediaContextState.currentSource); a null source is a load failure.
+  ///
+  /// When a [SourceResolver] was supplied, it runs here — the one place every
+  /// path that opens media funnels through (first load, episode switch,
+  /// quality switch, retry), so a host whose URLs are minted per playback
+  /// cannot end up with one of those paths opening a placeholder.
   Future<bool> initialize(VideoSource? source) async {
     final token = lifecycleToken;
     if (!token.isAlive) return false;
@@ -101,6 +134,11 @@ class PlaybackManager with LifecycleTokenProvider {
     // Reset error state on each initialization attempt
     _errorState = const ErrorState();
     safeEmit(_errorCtrl, _errorState, token);
+
+    // Stale the moment a new open starts: a reader between here and success
+    // must not be handed the PREVIOUS episode's url and quietly sweep or
+    // thumbnail the wrong media.
+    _openedSource = null;
 
     if (source == null) {
       _errorState = ErrorState(
@@ -111,10 +149,30 @@ class PlaybackManager with LifecycleTokenProvider {
       return false;
     }
     try {
-      await _player.initialize(source);
+      // Inside the try on purpose: a resolver talks to the network, and its
+      // failure is a load failure like any other — it must surface as a player
+      // error rather than escape into the caller as a bare exception.
+      final resolved = _sourceResolver == null
+          ? source
+          : await _sourceResolver(source);
+      if (!token.isAlive) return false;
+      if (resolved == null) {
+        _errorState = ErrorState(
+          error: PlayerError(
+            code: 'INIT_ERROR',
+            message: 'source could not be resolved',
+          ),
+        );
+        safeEmit(_errorCtrl, _errorState, token);
+        _setInitialized(false, token);
+        return false;
+      }
+
+      await _player.initialize(resolved);
 
       if (!token.isAlive) return false;
 
+      _openedSource = resolved;
       _setInitialized(true, token);
       return true;
     } catch (e, stackTrace) {
