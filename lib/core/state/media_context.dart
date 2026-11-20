@@ -84,7 +84,11 @@ class MediaContextState {
 
   String get title {
     if (video == null) return '';
-    if (episodes.isEmpty) return video!.title;
+    // One entry is not a series. A film arrives as a single "episode" whose
+    // title is a quality or a line name, and "门禁惊魂 - 576P" in the title
+    // bar names the encode, not the film. The suffix is for telling
+    // instalments apart, so it needs more than one to tell.
+    if (episodes.length <= 1) return video!.title;
     return "${video!.title} - ${episodes[currentEpisodeIndex].title}";
   }
 

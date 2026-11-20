@@ -174,6 +174,29 @@ void main() {
     expect(state.currentSource?.path, 'x');
   });
 
+  test('the title names the episode only when there is more than one', () {
+    const video = VideoMetadata(id: 'v', title: 'Film', coverUrl: '');
+    VideoEpisode ep(int i, String title) => VideoEpisode(
+      index: i,
+      title: title,
+      qualities: const [
+        VideoQuality(label: 'q', source: VideoSource.network('x')),
+      ],
+    );
+    expect(
+      MediaContextState(video: video, episodes: [ep(0, '576P')]).title,
+      'Film',
+    );
+    expect(
+      MediaContextState(
+        video: video,
+        episodes: [ep(0, 'E1'), ep(1, 'E2')],
+        currentEpisodeIndex: 1,
+      ).title,
+      'Film - E2',
+    );
+  });
+
   test('updateAutoSkip uses a default setting before settings load', () async {
     final repository = FakeMediaRepository();
     final manager = MediaManager(repository: repository);
