@@ -599,7 +599,7 @@ packages:
       path: ".."
       relative: true
     source: path
-    version: "1.8.0"
+    version: "1.9.0"
   vidra_player_kit:
     dependency: "direct main"
     description:

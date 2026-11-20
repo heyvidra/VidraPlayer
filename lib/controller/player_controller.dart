@@ -541,8 +541,19 @@ class PlayerController {
       }
 
       // Start switching state with episode title
+      // Pre-opened: no overlay unless the handover stalls. A two-minute
+      // episode that ends in a full-screen "switching…" card every time is
+      // exactly what pre-opening exists to remove.
+      final targetQualities = targetEpisode?.qualities ?? const [];
+      final targetSource = targetQualities.isEmpty
+          ? null
+          : targetQualities[media.currentQualityIndex.clamp(
+              0,
+              targetQualities.length - 1,
+            )].source;
       _playbackManager.startSwitching(
         targetEpisode?.title ?? localization.translate('unknown_episode'),
+        quiet: _playbackManager.isPrepared(targetSource),
       );
 
       // Save history for current episode. Fire-and-forget: the arguments are

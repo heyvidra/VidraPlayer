@@ -31,8 +31,15 @@ class _SwitchingOverlayState extends State<SwitchingOverlay> {
   /// user can't reach in time is just noise.
   static const _cancelAfter = Duration(seconds: 3);
 
+  /// A quiet switch that is still going after this is no longer quiet:
+  /// the pre-opened stream did not take, and a black frame with no word of
+  /// explanation is worse than the overlay.
+  static const _quietFor = Duration(milliseconds: 1500);
+
   Timer? _cancelTimer;
   bool _showCancel = false;
+  Timer? _revealTimer;
+  bool _held = false;
 
   @override
   void initState() {
@@ -59,6 +66,13 @@ class _SwitchingOverlayState extends State<SwitchingOverlay> {
   }
 
   void _armCancelTimer() {
+    _revealTimer?.cancel();
+    _held = widget.state.quiet;
+    if (_held) {
+      _revealTimer = Timer(_quietFor, () {
+        if (mounted) setState(() => _held = false);
+      });
+    }
     _showCancel = false;
     _cancelTimer?.cancel();
     _cancelTimer = Timer(_cancelAfter, () {
@@ -68,6 +82,7 @@ class _SwitchingOverlayState extends State<SwitchingOverlay> {
 
   @override
   void dispose() {
+    _revealTimer?.cancel();
     _cancelTimer?.cancel();
     super.dispose();
   }
@@ -79,6 +94,8 @@ class _SwitchingOverlayState extends State<SwitchingOverlay> {
     if (!state.isSwitching) {
       return const SizedBox.shrink();
     }
+    // Still takes the input a switch must not receive; draws nothing.
+    if (_held) return const AbsorbPointer(child: SizedBox.expand());
 
     return AnimatedOpacity(
       opacity: state.isSwitching ? 1.0 : 0.0,
@@ -123,8 +140,7 @@ class _SwitchingOverlayState extends State<SwitchingOverlay> {
                           widget.coverUrl!,
                           fit: BoxFit.cover,
                           cacheWidth:
-                              (200 *
-                                      MediaQuery.devicePixelRatioOf(context))
+                              (200 * MediaQuery.devicePixelRatioOf(context))
                                   .round(),
                           errorBuilder: (context, error, stack) {
                             return Container(

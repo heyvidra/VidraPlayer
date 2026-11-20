@@ -376,6 +376,17 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
     _wasLive = false;
 
     if (ctrl == null) return;
+    // The next source is already open and waiting. Do not make the viewer
+    // sit through this one being closed first: let go of it and finish the
+    // teardown behind the handover.
+    if (_standby != null) {
+      unawaited(_tearDown(ctrl));
+      return;
+    }
+    await _tearDown(ctrl);
+  }
+
+  Future<void> _tearDown(VideoPlayerController ctrl) async {
     try {
       ctrl.removeListener(_onTick);
       // Bounded: these platform calls run inside the switching window; a hung

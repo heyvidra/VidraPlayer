@@ -13,21 +13,28 @@ class SwitchingState {
   /// button's reveal timer) would silently carry over from the dead switch.
   final int attempt;
 
+  /// The target is already open, so this switch should be over before an
+  /// overlay could be read. The overlay holds back unless it drags on.
+  final bool quiet;
+
   const SwitchingState({
     this.isSwitching = false,
     this.targetQualityLabel,
     this.attempt = 0,
+    this.quiet = false,
   });
 
   SwitchingState copyWith({
     bool? isSwitching,
     String? targetQualityLabel,
     int? attempt,
+    bool? quiet,
   }) {
     return SwitchingState(
       isSwitching: isSwitching ?? this.isSwitching,
       targetQualityLabel: targetQualityLabel ?? this.targetQualityLabel,
       attempt: attempt ?? this.attempt,
+      quiet: quiet ?? this.quiet,
     );
   }
 

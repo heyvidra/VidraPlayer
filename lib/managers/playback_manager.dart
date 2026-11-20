@@ -168,6 +168,7 @@ class PlaybackManager with LifecycleTokenProvider {
         return false;
       }
 
+      _preparedFor = null; // Taken or mismatched: either way, spent.
       await _player.initialize(resolved);
 
       if (!token.isAlive) return false;
@@ -296,13 +297,29 @@ class PlaybackManager with LifecycleTokenProvider {
           : await _sourceResolver(source);
       if (resolved == null || _isDisposed) return;
       final player = _player;
-      if (player is BaseVideoPlayerAdapter) await player.prepareNext(resolved);
+      if (player is BaseVideoPlayerAdapter) {
+        await player.prepareNext(resolved);
+        if (!_isDisposed) _preparedFor = source;
+      }
     } catch (e) {
       logger.d('[PlaybackManager] prepareNext failed: $e');
     }
   }
 
+  /// The source [prepareNext] finished opening, as the host named it.
+  VideoSource? _preparedFor;
+
+  /// Whether [source] is open and waiting — a switch to it will be short.
+  bool isPrepared(VideoSource? source) {
+    final p = _preparedFor;
+    return p != null &&
+        source != null &&
+        p.type == source.type &&
+        p.path == source.path;
+  }
+
   Future<void> discardPrepared() async {
+    _preparedFor = null;
     final player = _player;
     if (player is BaseVideoPlayerAdapter) await player.discardPrepared();
   }
@@ -380,12 +397,13 @@ class PlaybackManager with LifecycleTokenProvider {
     if (!_errorCtrl.isClosed) _errorCtrl.add(_errorState);
   }
 
-  void startSwitching(String targetQualityLabel) {
+  void startSwitching(String targetQualityLabel, {bool quiet = false}) {
     if (_isDisposed) return;
 
     _switching = SwitchingState(
       isSwitching: true,
       targetQualityLabel: targetQualityLabel,
+      quiet: quiet,
       // New attempt id every time — the overlay resets its per-switch UI
       // state on this, since back-to-back end+start can reach it as a single
       // rebuild where isSwitching never visibly flips.
