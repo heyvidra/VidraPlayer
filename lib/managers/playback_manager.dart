@@ -284,6 +284,29 @@ class PlaybackManager with LifecycleTokenProvider {
     }
   }
 
+  /// Resolves and pre-opens [source] — the next episode — while the current
+  /// one is still playing. Resolving alone already helps hosts that mint a
+  /// URL per episode; the pre-open is what removes the load from the switch.
+  /// Never throws: the worst case is the switch opens from cold, as before.
+  Future<void> prepareNext(VideoSource? source) async {
+    if (source == null || _isDisposed) return;
+    try {
+      final resolved = _sourceResolver == null
+          ? source
+          : await _sourceResolver(source);
+      if (resolved == null || _isDisposed) return;
+      final player = _player;
+      if (player is BaseVideoPlayerAdapter) await player.prepareNext(resolved);
+    } catch (e) {
+      logger.d('[PlaybackManager] prepareNext failed: $e');
+    }
+  }
+
+  Future<void> discardPrepared() async {
+    final player = _player;
+    if (player is BaseVideoPlayerAdapter) await player.discardPrepared();
+  }
+
   Future<void> resetPlayer() async {
     // Old media is gone — don't let isInitialized lie true through the reopen.
     _setInitialized(false, lifecycleToken);

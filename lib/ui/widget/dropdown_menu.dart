@@ -286,8 +286,8 @@ class PlayerMenuPanel extends StatelessWidget {
           Flexible(
             child: ScrollConfiguration(
               behavior: ScrollConfiguration.of(
-                  context,
-                ).copyWith(scrollbars: false),
+                context,
+              ).copyWith(scrollbars: false),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Column(
@@ -468,6 +468,12 @@ class PlayerMenuAdjustmentItem extends StatelessWidget {
   final String suffix;
   final VoidCallback onIncrement;
   final VoidCallback onDecrement;
+
+  /// Sets the value from where playback is right now. Counting seconds and
+  /// tapping them in is the wrong way round when the viewer is looking at
+  /// the exact frame the intro ends on.
+  final VoidCallback? onSetCurrent;
+  final String? setCurrentTooltip;
   final PlayerUITheme? theme;
 
   const PlayerMenuAdjustmentItem({
@@ -478,6 +484,8 @@ class PlayerMenuAdjustmentItem extends StatelessWidget {
     this.suffix = '',
     required this.onIncrement,
     required this.onDecrement,
+    this.onSetCurrent,
+    this.setCurrentTooltip,
     this.theme,
   });
 
@@ -514,6 +522,17 @@ class PlayerMenuAdjustmentItem extends StatelessWidget {
             onPressed: onIncrement,
             color: playerTheme.iconColor,
           ),
+          if (onSetCurrent != null) ...[
+            const SizedBox(width: 6),
+            Tooltip(
+              message: setCurrentTooltip ?? '',
+              child: _AdjustmentButton(
+                icon: Icons.my_location,
+                onPressed: onSetCurrent!,
+                color: playerTheme.iconColor,
+              ),
+            ),
+          ],
         ],
       ),
     );

@@ -82,13 +82,20 @@ class SettingsMenu extends StatelessWidget {
                     value: setting.skipIntro,
                     suffix: 's',
                     onIncrement: () {
-                      controller.updateSkipIntro(setting.skipIntro + 5);
+                      controller.updateSkipIntro(setting.skipIntro + 1);
                     },
                     onDecrement: () {
                       if (setting.skipIntro > 0) {
-                        controller.updateSkipIntro(setting.skipIntro - 5);
+                        controller.updateSkipIntro(setting.skipIntro - 1);
                       }
                     },
+                    // The intro ends where the viewer is looking.
+                    onSetCurrent: () => controller.updateSkipIntro(
+                      controller.position.position.inSeconds,
+                    ),
+                    setCurrentTooltip: controller.localization.translate(
+                      'set_to_current',
+                    ),
                     theme: theme,
                   ),
                   PlayerMenuAdjustmentItem(
@@ -97,13 +104,23 @@ class SettingsMenu extends StatelessWidget {
                     value: setting.skipOutro,
                     suffix: 's',
                     onIncrement: () {
-                      controller.updateSkipOutro(setting.skipOutro + 5);
+                      controller.updateSkipOutro(setting.skipOutro + 1);
                     },
                     onDecrement: () {
                       if (setting.skipOutro > 0) {
-                        controller.updateSkipOutro(setting.skipOutro - 5);
+                        controller.updateSkipOutro(setting.skipOutro - 1);
                       }
                     },
+                    // The outro starts where the viewer is looking: what is
+                    // stored is how much of the tail that leaves.
+                    onSetCurrent: () {
+                      final p = controller.position;
+                      final tail = (p.duration - p.position).inSeconds;
+                      if (tail > 0) controller.updateSkipOutro(tail);
+                    },
+                    setCurrentTooltip: controller.localization.translate(
+                      'set_to_current',
+                    ),
                     theme: theme,
                   ),
                 ],

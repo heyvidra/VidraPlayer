@@ -31,6 +31,12 @@ class PlayerBehavior {
   final bool enableThumbnail;
   final ResumeMode resumeMode;
 
+  /// Open the next episode a few seconds before this one ends, so the switch
+  /// lands on a stream that is already playing-ready instead of a spinner.
+  /// Two decoders exist for that stretch; a host that cannot afford it turns
+  /// this off.
+  final bool preloadNextEpisode;
+
   const PlayerBehavior({
     this.autoHideDelay = const Duration(seconds: 3),
     this.mouseHideDelay = const Duration(seconds: 2),
@@ -45,6 +51,7 @@ class PlayerBehavior {
     this.initialVolume = 1.0,
     this.enableThumbnail = true,
     this.resumeMode = ResumeMode.auto,
+    this.preloadNextEpisode = true,
   });
 
   PlayerBehavior copyWith({
@@ -61,6 +68,7 @@ class PlayerBehavior {
     double? initialVolume,
     bool? enableThumbnail,
     ResumeMode? resumeMode,
+    bool? preloadNextEpisode,
   }) {
     return PlayerBehavior(
       autoHideDelay: autoHideDelay ?? this.autoHideDelay,
@@ -77,6 +85,7 @@ class PlayerBehavior {
       initialVolume: initialVolume ?? this.initialVolume,
       enableThumbnail: enableThumbnail ?? this.enableThumbnail,
       resumeMode: resumeMode ?? this.resumeMode,
+      preloadNextEpisode: preloadNextEpisode ?? this.preloadNextEpisode,
     );
   }
 

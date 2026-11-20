@@ -49,6 +49,78 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
   bool _wasBuffering = false;
   bool _wasLive = false;
 
+  // ── Pre-opened next source ──────────────────────────────────────────────────
+
+  // A second controller, opened and left paused, for the source the host
+  // expects to play next. [onInitialize] takes it over when asked for the
+  // same source; anything else disposes it.
+  VideoPlayerController? _standby;
+  VideoSource? _standbySource;
+  Future<void>? _standbyReady;
+
+  static bool _sameSource(VideoSource? a, VideoSource b) =>
+      a != null && a.type == b.type && a.path == b.path;
+
+  @override
+  Future<void> prepareNext(VideoSource source) async {
+    if (_sameSource(_standbySource, source)) return;
+    await discardPrepared();
+    final ctrl = _buildController(source);
+    _standby = ctrl;
+    _standbySource = source;
+    final ready = ctrl.initialize().catchError((Object _) {});
+    _standbyReady = ready;
+    await ready;
+    // Still ours, and it did not open: drop it so the switch opens normally
+    // (with its retries) rather than adopting a dead controller.
+    if (identical(_standby, ctrl) &&
+        (!ctrl.value.isInitialized || ctrl.value.hasError)) {
+      await discardPrepared();
+    }
+  }
+
+  @override
+  Future<void> discardPrepared() async {
+    final ctrl = _standby;
+    _standby = null;
+    _standbySource = null;
+    _standbyReady = null;
+    if (ctrl == null) return;
+    try {
+      await ctrl.dispose().timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Being discarded either way.
+    }
+  }
+
+  @override
+  Future<void> dispose() async {
+    await discardPrepared();
+    await super.dispose();
+  }
+
+  /// The pre-opened controller for [source], if there is a usable one.
+  Future<VideoPlayerController?> _takeStandby(VideoSource source) async {
+    if (!_sameSource(_standbySource, source)) {
+      await discardPrepared();
+      return null;
+    }
+    final ctrl = _standby!;
+    final ready = _standbyReady;
+    // Asked for before it finished opening: wait for that open rather than
+    // starting a second one beside it.
+    if (ready != null) await ready;
+    if (!identical(_standby, ctrl)) return null; // Discarded meanwhile.
+    _standby = null;
+    _standbySource = null;
+    _standbyReady = null;
+    if (ctrl.value.isInitialized && !ctrl.value.hasError) return ctrl;
+    try {
+      await ctrl.dispose();
+    } catch (_) {}
+    return null;
+  }
+
   // ── onInitialize ────────────────────────────────────────────────────────────
 
   @override
@@ -67,6 +139,28 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
     // that is the kind of alignment that breaks the next time someone moves it.
     _wasBuffering = true;
 
+    final adopted = await _takeStandby(source);
+    if (adopted != null) {
+      // Opened while the previous episode was still playing; nothing left
+      // to wait for.
+      _controller = adopted;
+      emitBuffering(const BufferingState(isBuffering: false));
+    } else {
+      await _openFromCold(source, token);
+    }
+
+    // Initialization succeeded!
+    // Emit initial video size — available right after initialize().
+    final size = _controller!.value.size;
+    emitVideoSize(VideoSize(size.width.toInt(), size.height.toInt()));
+
+    _raiseBufferCeiling();
+
+    // Attach regular heartbeat updates
+    _controller!.addListener(_onTick);
+  }
+
+  Future<void> _openFromCold(VideoSource source, LifecycleToken token) async {
     final errorCtrl = StreamController<String>.broadcast();
 
     // The tick listener to capture async errors during initialization before
@@ -110,14 +204,17 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
           source: source,
           token: token,
           cancelToken: cancelToken,
-          getCurrentDuration: () => _controller?.value.duration ?? Duration.zero,
+          getCurrentDuration: () =>
+              _controller?.value.duration ?? Duration.zero,
           getCurrentWidth: () => _controller?.value.size.width.toInt(),
         ),
         onRetry: (attempt, maxRetries) {
-          emitBuffering(BufferingState(
-            isBuffering: true,
-            message: 'Retrying... ($attempt/$maxRetries)',
-          ));
+          emitBuffering(
+            BufferingState(
+              isBuffering: true,
+              message: 'Retrying... ($attempt/$maxRetries)',
+            ),
+          );
         },
       );
     } finally {
@@ -126,16 +223,6 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
       _controller?.removeListener(initTickListener);
       await errorCtrl.close();
     }
-
-    // Initialization succeeded!
-    // Emit initial video size — available right after initialize().
-    final size = _controller!.value.size;
-    emitVideoSize(VideoSize(size.width.toInt(), size.height.toInt()));
-
-    _raiseBufferCeiling();
-
-    // Attach regular heartbeat updates
-    _controller!.addListener(_onTick);
   }
 
   /// Widen mdk's packet buffer so playback survives a network dip and the
@@ -160,7 +247,6 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
     ctrl.setBufferRange(min: 4000, max: 60000);
   }
 
-
   VideoPlayerController _buildController(VideoSource source) {
     final opts = VideoPlayerOptions(
       mixWithOthers: false,
@@ -168,18 +254,18 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
     );
     return switch (source.type) {
       VideoSourceType.network => VideoPlayerController.networkUrl(
-          Uri.parse(source.path),
-          videoPlayerOptions: opts,
-          httpHeaders: getHttpProxyHeaders(source) ?? const {},
-        ),
+        Uri.parse(source.path),
+        videoPlayerOptions: opts,
+        httpHeaders: getHttpProxyHeaders(source) ?? const {},
+      ),
       VideoSourceType.file => VideoPlayerController.file(
-          File(source.path),
-          videoPlayerOptions: opts,
-        ),
+        File(source.path),
+        videoPlayerOptions: opts,
+      ),
       VideoSourceType.asset => VideoPlayerController.asset(
-          source.path,
-          videoPlayerOptions: opts,
-        ),
+        source.path,
+        videoPlayerOptions: opts,
+      ),
     };
   }
 
@@ -246,12 +332,14 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
           value.errorDescription ?? 'Unknown error',
           context: 'video_player_tick',
         );
-        emitError(PlayerError(
-          code: wrapped.code ?? '',
-          message: wrapped.message,
-          details: wrapped.details,
-          timestamp: wrapped.timestamp,
-        ));
+        emitError(
+          PlayerError(
+            code: wrapped.code ?? '',
+            message: wrapped.message,
+            details: wrapped.details,
+            timestamp: wrapped.timestamp,
+          ),
+        );
       }
     } else if (_errorEmitted) {
       _errorEmitted = false;
@@ -338,7 +426,8 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
   bool get isPlaying => _controller?.value.isPlaying ?? false;
 
   @override
-  bool get isLive => isStreamLive(currentSource, _controller?.value.duration ?? Duration.zero);
+  bool get isLive =>
+      isStreamLive(currentSource, _controller?.value.duration ?? Duration.zero);
 
   @override
   VideoSize? get videoSize {

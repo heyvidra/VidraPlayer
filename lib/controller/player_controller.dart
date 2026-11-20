@@ -143,6 +143,15 @@ class PlayerController {
   bool _cancelledLoad = false;
   bool _isSkippingOutro = false; // Currently executing a skip action
   bool _hasSkippedOutro = false; // Already skipped for this episode
+
+  /// The episode whose successor has been pre-opened, so the tick that
+  /// crosses the threshold asks once and not ten times a second.
+  int? _preparedForEpisode;
+
+  /// How long before the end (or before the outro skip) the next episode is
+  /// opened. Long enough for a cold CDN, short enough that a viewer who
+  /// stops near the end has not paid for a stream they never watched.
+  static const int _prepareLeadSeconds = 15;
   bool _hintedMarkerSetup = false; // The right-click hint fired once already
 
   // Subscriptions
@@ -738,6 +747,7 @@ class PlayerController {
     if (index < 0 || index >= _mediaManager.state.episodes.length) return;
 
     _hasSkippedOutro = false; // Reset skip state for new episode
+    _preparedForEpisode = null;
 
     // Block periodic progress saves for the WHOLE load, not just from the
     // resume check onward: position(0) events emitted while the player opens
@@ -858,7 +868,10 @@ class PlayerController {
     final url = playingSource?.path;
     if (url == null) return;
     final scheme = Uri.tryParse(url)?.scheme.toLowerCase();
-    if (scheme != 'http' && scheme != 'https' && scheme != 'file' && scheme != '') {
+    if (scheme != 'http' &&
+        scheme != 'https' &&
+        scheme != 'file' &&
+        scheme != '') {
       return;
     }
 
@@ -1571,6 +1584,42 @@ class PlayerController {
   }
 
   /// Extracted frame-dependent logic: Runs ONLY when explicitly allowed
+  /// Pre-opens the next episode when this one is about to hand over.
+  ///
+  /// A short drama is hundreds of two-minute episodes; a second or two of
+  /// spinner between each is most of what watching one feels like.
+  void _maybePrepareNext(PlaybackPositionState state) {
+    if (!config.behavior.preloadNextEpisode ||
+        !autoPlayNext ||
+        !hasNextEpisode ||
+        state.isLive ||
+        state.isSeeking ||
+        _isSwitchingEpisode ||
+        _isSwitchingQuality) {
+      return;
+    }
+    final duration = state.duration.inSeconds;
+    if (duration < 20) return;
+    final setting = effectiveSkipSetting;
+    // Measured to where playback will actually leave this episode.
+    final tail = setting.autoSkip ? setting.skipOutro : 0;
+    final remaining = duration - state.position.inSeconds - tail;
+    final index = media.currentEpisodeIndex;
+    if (remaining <= _prepareLeadSeconds) {
+      if (_preparedForEpisode == index) return;
+      _preparedForEpisode = index;
+      final qualities = media.episodes[index + 1].qualities;
+      if (qualities.isEmpty) return;
+      final quality =
+          qualities[media.currentQualityIndex.clamp(0, qualities.length - 1)];
+      unawaited(_playbackManager.prepareNext(quality.source));
+    } else if (_preparedForEpisode == index && remaining > 45) {
+      // Scrubbed back well clear of the end: do not sit on an open stream.
+      _preparedForEpisode = null;
+      unawaited(_playbackManager.discardPrepared());
+    }
+  }
+
   Future<void> _onPositionUpdate(PlaybackPositionState state) async {
     if (_isDisposed) return;
 
@@ -1581,6 +1630,7 @@ class PlayerController {
     _lastPosition = state;
 
     _maybeHintMarkerSetup(state);
+    _maybePrepareNext(state);
 
     // --- Auto Skip Outro Logic (delegated) ---
     if (!_isSkippingOutro && !_hasSkippedOutro && !state.isSeeking) {

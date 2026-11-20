@@ -155,6 +155,15 @@ abstract class BaseVideoPlayerAdapter
   @protected
   Future<void> onReset();
 
+  /// Opens [source] ahead of time, without showing or playing it, so a later
+  /// [initialize] with the same source can take it over instead of opening
+  /// from cold. Best effort: an adapter that cannot do this leaves the
+  /// default, and one that fails simply opens normally when asked.
+  Future<void> prepareNext(VideoSource source) async {}
+
+  /// Drops whatever [prepareNext] opened and nobody took.
+  Future<void> discardPrepared() async {}
+
   /// Return the widget that renders video frames for this adapter.
   ///
   /// Called by [render]. Return [SizedBox.shrink] when not yet ready.
@@ -564,7 +573,10 @@ abstract class BaseVideoPlayerAdapter
 
   /// Perform optional DNS/Node warmup for HLS playlists.
   @protected
-  Future<void> performHlsWarmup(VideoSource source, LifecycleToken token) async {
+  Future<void> performHlsWarmup(
+    VideoSource source,
+    LifecycleToken token,
+  ) async {
     if (!isM3u8(source.path)) return;
 
     emitBuffering(
