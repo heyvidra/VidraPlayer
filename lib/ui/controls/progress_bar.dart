@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../../controller/player_controller.dart';
 import '../../core/model/model.dart';
 import '../../core/state/states.dart';

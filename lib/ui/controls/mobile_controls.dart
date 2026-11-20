@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vidra_player/core/state/states.dart';
 import '../../controller/player_controller.dart';
 import '../../core/model/player_ui_theme.dart';

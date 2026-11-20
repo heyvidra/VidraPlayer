@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../../controller/player_controller.dart';
 import '../../core/state/states.dart';
 import 'progress_bar.dart';

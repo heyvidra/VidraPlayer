@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'dart:typed_data';
 import '../../controller/player_controller.dart';
 import '../../managers/thumbnail_manager.dart';

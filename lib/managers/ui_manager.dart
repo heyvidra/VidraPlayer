@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../core/interfaces/window_delegate.dart';
 import '../core/model/player_behavior.dart';

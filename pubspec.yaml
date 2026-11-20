@@ -1,13 +1,13 @@
 name: vidra_player
 description: "Modular Flutter video player SDK with episodes, quality switching, resume, and skip logic."
-version: 1.7.0
+version: 1.8.0
 homepage: https://github.com/heyvidra/VidraPlayer
 repository: https://github.com/heyvidra/VidraPlayer
 issue_tracker: https://github.com/heyvidra/VidraPlayer/issues
 
 environment:
   sdk: ^3.10.4
-  flutter: ">=3.3.0"
+  flutter: ">=3.47.0"
 
 dependencies:
   flutter:
@@ -16,6 +16,7 @@ dependencies:
   wakelock_plus: ^1.5.1
   auto_orientation: ^2.0.1
   simple_pip_mode: ^1.1.0
+  material_ui: ^1.11.1
 
 dev_dependencies:
   flutter_test:

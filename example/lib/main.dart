@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vidra_player/vidra_player.dart';
 import 'package:vidra_player_kit/vidra_player_kit.dart';
 

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:vidra_player/ui/widget/blur.dart';
 import 'package:vidra_player/ui/widget/animation_button.dart';
 

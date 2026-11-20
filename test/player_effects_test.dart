@@ -1,7 +1,7 @@
 // The low-end-machine switch: PlayerEffects.reduced must actually remove the
 // GPU readback passes (backdrop blur, blurred shadows) and nothing else.
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vidra_player/core/player_effects.dart';
 import 'package:vidra_player/ui/widget/blur.dart';

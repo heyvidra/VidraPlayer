@@ -1,5 +1,5 @@
 import 'dart:math';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Netflix style Loading: Red bars bouncing
 class NetflixLoading extends StatefulWidget {

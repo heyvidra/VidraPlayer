@@ -1,6 +1,6 @@
 // ui/overlays/episode_list.dart
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import '../../controller/player_controller.dart';
 import '../../core/localization/localization.dart';
 import '../../core/model/model.dart';

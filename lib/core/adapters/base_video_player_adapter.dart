@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../interfaces/video_player.dart';
 import '../lifecycle/lifecycle_token.dart';
