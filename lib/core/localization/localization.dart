@@ -38,6 +38,18 @@ class VidraLocalization {
     return text;
   }
 
+  /// What to tell a person about an error with this [code] and [message].
+  ///
+  /// Exceptions carry an English, developer-facing message — often with the
+  /// stream URL in it. Where the code is one we have words for, say those
+  /// instead; anything else falls back to the message as thrown.
+  String errorMessage(String? code, String message) {
+    if (code == null) return message;
+    final key = 'error_msg_${code.toLowerCase()}';
+    final text = translate(key);
+    return text == key ? message : text;
+  }
+
   /// Built-in translation map
   static const Map<String, Map<String, String>> _translations = {
     'en': {
@@ -96,6 +108,17 @@ class VidraLocalization {
       'error': 'Error',
       'details': 'Details',
       'error_code': 'Error Code',
+      'error_msg_service_unavailable': 'This source is not responding',
+      'error_msg_timeout': 'The source took too long to respond',
+      'error_msg_gateway_timeout': 'The source took too long to respond',
+      'error_msg_not_found':
+          'This video is no longer available from the source',
+      'error_msg_forbidden': 'The source refused the request',
+      'error_msg_unauthorized': 'The source refused the request',
+      'error_msg_rate_limit': 'Too many requests — try again in a moment',
+      'error_msg_server_error': 'The source reported an error',
+      'error_msg_bad_gateway': 'The source reported an error',
+      'error_msg_open_failed': 'Could not open this video',
       'timestamp': 'Timestamp',
       'stack_trace': 'Stack Trace',
       'report_issue': 'Report Issue',
@@ -227,6 +250,16 @@ class VidraLocalization {
       'error': '错误',
       'details': '详情',
       'error_code': '错误代码',
+      'error_msg_service_unavailable': '片源没有响应',
+      'error_msg_timeout': '片源响应超时',
+      'error_msg_gateway_timeout': '片源响应超时',
+      'error_msg_not_found': '片源里已经没有这个视频',
+      'error_msg_forbidden': '片源拒绝了请求',
+      'error_msg_unauthorized': '片源拒绝了请求',
+      'error_msg_rate_limit': '请求太频繁，请稍后再试',
+      'error_msg_server_error': '片源出错了',
+      'error_msg_bad_gateway': '片源出错了',
+      'error_msg_open_failed': '无法打开这个视频',
       'timestamp': '时间',
       'stack_trace': '堆栈跟踪',
       'report_issue': '报告问题',
@@ -356,6 +389,16 @@ class VidraLocalization {
       'error': '錯誤',
       'details': '詳情',
       'error_code': '錯誤代碼',
+      'error_msg_service_unavailable': '片源沒有回應',
+      'error_msg_timeout': '片源回應逾時',
+      'error_msg_gateway_timeout': '片源回應逾時',
+      'error_msg_not_found': '片源裡已經沒有這個影片',
+      'error_msg_forbidden': '片源拒絕了請求',
+      'error_msg_unauthorized': '片源拒絕了請求',
+      'error_msg_rate_limit': '請求太頻繁，請稍後再試',
+      'error_msg_server_error': '片源出錯了',
+      'error_msg_bad_gateway': '片源出錯了',
+      'error_msg_open_failed': '無法開啟這個影片',
       'timestamp': '時間',
       'stack_trace': '堆疊追蹤',
       'report_issue': '報告問題',

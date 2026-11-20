@@ -189,7 +189,10 @@ class _ErrorDisplayState extends State<ErrorDisplay> {
           const SizedBox(height: 8.0),
 
           Text(
-            widget.error.message,
+            widget.controller.localization.errorMessage(
+              widget.error.code,
+              widget.error.message,
+            ),
             style: TextStyle(color: theme.textColor, fontSize: 12.0),
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
@@ -249,7 +252,10 @@ class _ErrorDisplayState extends State<ErrorDisplay> {
           const SizedBox(width: 12.0),
           Expanded(
             child: Text(
-              widget.error.message,
+              widget.controller.localization.errorMessage(
+                widget.error.code,
+                widget.error.message,
+              ),
               style: const TextStyle(color: Colors.white),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -326,7 +332,10 @@ class _ErrorDisplayState extends State<ErrorDisplay> {
       children: [
         // Error Message
         Text(
-          widget.error.message,
+          widget.controller.localization.errorMessage(
+            widget.error.code,
+            widget.error.message,
+          ),
           style:
               widget.messageStyle ??
               TextStyle(color: textColor, fontSize: 16.0),
