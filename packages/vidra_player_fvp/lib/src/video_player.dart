@@ -68,6 +68,7 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
     final ctrl = _buildController(source);
     _standby = ctrl;
     _standbySource = source;
+    debugPrint('[VidraPlayer] pre-opening the next stream');
     final ready = ctrl.initialize().catchError((Object _) {});
     _standbyReady = ready;
     await ready;
@@ -144,8 +145,10 @@ class VideoPlayerAdapter extends BaseVideoPlayerAdapter {
       // Opened while the previous episode was still playing; nothing left
       // to wait for.
       _controller = adopted;
+      debugPrint('[VidraPlayer] switch: adopted the pre-opened stream');
       emitBuffering(const BufferingState(isBuffering: false));
     } else {
+      debugPrint('[VidraPlayer] switch: opening from cold');
       await _openFromCold(source, token);
     }
 
