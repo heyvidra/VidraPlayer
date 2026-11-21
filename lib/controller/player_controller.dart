@@ -548,9 +548,10 @@ class PlayerController {
       final targetSource = targetQualities.isEmpty
           ? null
           : targetQualities[media.currentQualityIndex.clamp(
-              0,
-              targetQualities.length - 1,
-            )].source;
+                  0,
+                  targetQualities.length - 1,
+                )]
+                .source;
       _playbackManager.startSwitching(
         targetEpisode?.title ?? localization.translate('unknown_episode'),
         quiet: _playbackManager.isPrepared(targetSource),
@@ -867,6 +868,9 @@ class PlayerController {
 
   /// Read intro/outro markers out of the media's own chapters, if it has any.
   /// Never throws and never blocks for long — see [probeChapters].
+  /// The chapter probe for the pre-opened episode, keyed by its url.
+  (String, Future<EpisodeMarkers?>)? _earlyProbe;
+
   Future<void> _probeChapterMarkers(int index) async {
     // Anything already recorded (a manual edit, a previous probe) outranks
     // this, so don't spend a request re-deriving it.
@@ -886,7 +890,11 @@ class PlayerController {
       return;
     }
 
-    final markers = await probeChapters(url, index);
+    final early = _earlyProbe;
+    _earlyProbe = null;
+    final markers = await (early != null && early.$1 == url
+        ? early.$2
+        : probeChapters(url, index));
     if (markers == null || _isDisposed) return;
     if (_mediaManager.state.currentEpisodeIndex != index) return;
 
@@ -1623,7 +1631,18 @@ class PlayerController {
       if (qualities.isEmpty) return;
       final quality =
           qualities[media.currentQualityIndex.clamp(0, qualities.length - 1)];
-      unawaited(_playbackManager.prepareNext(quality.source));
+      unawaited(
+        _playbackManager.prepareNext(
+          quality.source,
+          // The switch waits on this probe before it plays. With the stream
+          // already open that wait is all that is left of the gap, so have
+          // the answer ready too.
+          onResolved: (resolved) {
+            if (_mediaManager.state.episodeMarkers.containsKey(index)) return;
+            _earlyProbe = (resolved.path, probeChapters(resolved.path, index));
+          },
+        ),
+      );
     } else if (_preparedForEpisode == index && remaining > 45) {
       // Scrubbed back well clear of the end: do not sit on an open stream.
       _preparedForEpisode = null;

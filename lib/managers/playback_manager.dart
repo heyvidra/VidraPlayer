@@ -289,13 +289,20 @@ class PlaybackManager with LifecycleTokenProvider {
   /// one is still playing. Resolving alone already helps hosts that mint a
   /// URL per episode; the pre-open is what removes the load from the switch.
   /// Never throws: the worst case is the switch opens from cold, as before.
-  Future<void> prepareNext(VideoSource? source) async {
+  ///
+  /// [onResolved] hears the resolved source before the pre-open starts, so
+  /// anything else the switch would wait on can be fetched alongside it.
+  Future<void> prepareNext(
+    VideoSource? source, {
+    void Function(VideoSource resolved)? onResolved,
+  }) async {
     if (source == null || _isDisposed) return;
     try {
       final resolved = _sourceResolver == null
           ? source
           : await _sourceResolver(source);
       if (resolved == null || _isDisposed) return;
+      onResolved?.call(resolved);
       final player = _player;
       if (player is BaseVideoPlayerAdapter) {
         await player.prepareNext(resolved);

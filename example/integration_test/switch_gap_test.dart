@@ -3,7 +3,10 @@
 // Real backend, real network, no mouse. Run with:
 //   flutter test integration_test/switch_gap_test.dart -d macos
 
+import 'dart:async';
+import 'dart:ui' as ui;
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:material_ui/material_ui.dart';
@@ -30,7 +33,29 @@ List<VideoEpisode> _episodes() => [
     ),
 ];
 
-Future<int> _measure(WidgetTester tester, {required bool preload}) async {
+/// Mean brightness (0-255) of what is on screen, or null mid-paint.
+Future<double?> _brightness(GlobalKey key) async {
+  final box = key.currentContext?.findRenderObject();
+  if (box is! RenderRepaintBoundary || box.debugNeedsPaint) return null;
+  final image = await box.toImage(pixelRatio: 0.1);
+  final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+  image.dispose();
+  if (bytes == null) return null;
+  var sum = 0;
+  for (var i = 0; i < bytes.lengthInBytes; i += 4) {
+    sum += bytes.getUint8(i) + bytes.getUint8(i + 1) + bytes.getUint8(i + 2);
+  }
+  return sum / (bytes.lengthInBytes / 4 * 3);
+}
+
+/// Returns (gap, dark): milliseconds nothing moved, and the longest stretch
+/// of those the screen was black for. `dark` only means something on a
+/// stream that is never black itself.
+Future<(int, int)> _measure(
+  WidgetTester tester, {
+  required bool preload,
+}) async {
+  final screen = GlobalKey();
   final controller = PlayerController(
     config: PlayerConfig(
       features: const PlayerFeatures(enableHistory: false),
@@ -48,7 +73,10 @@ Future<int> _measure(WidgetTester tester, {required bool preload}) async {
     MaterialApp(
       home: Scaffold(
         backgroundColor: Colors.black,
-        body: VideoPlayerWidget(controller: controller),
+        body: RepaintBoundary(
+          key: screen,
+          child: VideoPlayerWidget(controller: controller),
+        ),
       ),
     ),
   );
@@ -86,14 +114,41 @@ Future<int> _measure(WidgetTester tester, {required bool preload}) async {
     duration - const Duration(seconds: 22),
     SeekSource.external,
   );
+  final samples = <(int, double)>[];
+  var sampling = false;
+  final sampler = Timer.periodic(const Duration(milliseconds: 30), (_) async {
+    if (sampling) return;
+    sampling = true;
+    final at = clock.elapsedMilliseconds;
+    final b = await _brightness(screen);
+    if (b != null) samples.add((at, b));
+    sampling = false;
+  });
   await until(() => firstMovingOnSecond != null, 'the second episode to play');
+  sampler.cancel();
 
   final gap = firstMovingOnSecond! - lastMovingOnFirst!;
+  var dark = 0;
+  int? darkSince;
+  for (final (at, b) in samples) {
+    if (at < lastMovingOnFirst! - 500) continue;
+    if (b < 8) {
+      darkSince ??= at;
+      if (at - darkSince > dark) dark = at - darkSince;
+    } else {
+      darkSince = null;
+    }
+  }
+  // ignore: avoid_print
+  print(
+    'BRIGHTNESS preload=$preload ${[for (final (at, b) in samples)
+      if (at > lastMovingOnFirst! - 500) '${at - lastMovingOnFirst!}:${b.round()}'].join(' ')}',
+  );
   await sub.cancel();
   await tester.pumpWidget(const SizedBox());
   await controller.dispose();
   await tester.pump(const Duration(seconds: 1));
-  return gap;
+  return (gap, dark);
 }
 
 void main() {
@@ -101,10 +156,13 @@ void main() {
   VidraPlayerKit.ensureInitialized();
 
   testWidgets('gap between episodes, cold open vs pre-opened', (tester) async {
-    final cold = await _measure(tester, preload: false);
-    final warm = await _measure(tester, preload: true);
+    final (cold, coldDark) = await _measure(tester, preload: false);
+    final (warm, warmDark) = await _measure(tester, preload: true);
     // ignore: avoid_print
-    print('SWITCH_GAP cold_ms=$cold preopened_ms=$warm');
+    print(
+      'SWITCH_GAP cold_ms=$cold preopened_ms=$warm '
+      'cold_dark_ms=$coldDark preopened_dark_ms=$warmDark',
+    );
     expect(warm, lessThan(cold), reason: 'pre-opening must not be slower');
   });
 }
